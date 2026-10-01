@@ -89,15 +89,22 @@ jobs:
           AGENT_LDFLAGS="-X github.com/sagernet/sing-box/constant.Version=${SINGBOX_VERSION} ${VERSION_LDFLAGS}"
           PANEL_LDFLAGS="-s -w ${VERSION_LDFLAGS}"
 
-          for pair in linux/amd64 linux/arm64; do
+          # armhf 为 GOARCH=arm GOARM=7，发布文件名后缀是 linux-armhf。
+          for pair in linux/amd64 linux/arm64 linux/armhf; do
             GOOS="${pair%/*}"
-            GOARCH="${pair#*/}"
-            echo "==> $GOOS/$GOARCH version=${VERSION}"
-            (cd panel && GOOS=$GOOS GOARCH=$GOARCH go build -trimpath -ldflags="${PANEL_LDFLAGS}" \
-              -o ../dist/panel-${GOOS}-${GOARCH} ./cmd/panel)
-            (cd agent && GOOS=$GOOS GOARCH=$GOARCH go build -trimpath -tags "${AGENT_TAGS}" \
+            SUFFIX="${pair#*/}"
+            GOARCH="${SUFFIX}"
+            GOARM=""
+            if [[ "${SUFFIX}" == "armhf" ]]; then
+              GOARCH="arm"
+              GOARM="7"
+            fi
+            echo "==> $GOOS/$GOARCH suffix=${SUFFIX} version=${VERSION}"
+            (cd panel && GOOS=$GOOS GOARCH=$GOARCH GOARM=$GOARM go build -trimpath -ldflags="${PANEL_LDFLAGS}" \
+              -o ../dist/panel-${GOOS}-${SUFFIX} ./cmd/panel)
+            (cd agent && GOOS=$GOOS GOARCH=$GOARCH GOARM=$GOARM go build -trimpath -tags "${AGENT_TAGS}" \
               -ldflags="-s -w ${AGENT_LDFLAGS}" \
-              -o ../dist/ladder-agent-${GOOS}-${GOARCH} ./cmd/ladder-agent)
+              -o ../dist/ladder-agent-${GOOS}-${SUFFIX} ./cmd/ladder-agent)
           done
           cp scripts/install-panel.sh dist/
           cp scripts/install-agent.sh dist/
@@ -120,8 +127,10 @@ jobs:
           files: |
             dist/panel-linux-amd64
             dist/panel-linux-arm64
+            dist/panel-linux-armhf
             dist/ladder-agent-linux-amd64
             dist/ladder-agent-linux-arm64
+            dist/ladder-agent-linux-armhf
             dist/install-panel.sh
             dist/install-agent.sh
             dist/SHA256SUMS.txt

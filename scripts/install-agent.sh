@@ -124,8 +124,8 @@ detect_arch() {
   case "${m}" in
     x86_64 | amd64) echo "amd64" ;;
     aarch64 | arm64) echo "arm64" ;;
-    armv7l | armhf) die "暂无 armv7 官方预编译，请自行交叉编译或使用 LADDER_FROM=local" ;;
-    *) die "不支持的架构: ${m}（需要 amd64 或 arm64）" ;;
+    armv7l | armhf) echo "armhf" ;;
+    *) die "不支持的架构: ${m}（需要 amd64、arm64 或 armhf）" ;;
   esac
 }
 
@@ -620,6 +620,7 @@ ARCH="$(uname -m)"
 case "${ARCH}" in
   x86_64|amd64) ASSET="ladder-agent-linux-amd64" ;;
   aarch64|arm64) ASSET="ladder-agent-linux-arm64" ;;
+  armv7l|armhf) ASSET="ladder-agent-linux-armhf" ;;
   *) echo "不支持的架构：${ARCH}" >&2; exit 1 ;;
 esac
 STAGED="${UPGRADE_DIR}/${ASSET}"
@@ -684,6 +685,7 @@ Description=Watch LadderAirport agent upgrade staging dir
 [Path]
 PathExists=${DATA_DIR}/upgrade/ladder-agent-linux-amd64.ready
 PathExists=${DATA_DIR}/upgrade/ladder-agent-linux-arm64.ready
+PathExists=${DATA_DIR}/upgrade/ladder-agent-linux-armhf.ready
 Unit=ladder-agent-upgrade.service
 
 [Install]

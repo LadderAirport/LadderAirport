@@ -134,8 +134,8 @@ detect_arch() {
   case "${m}" in
     x86_64 | amd64) echo "amd64" ;;
     aarch64 | arm64) echo "arm64" ;;
-    armv7l | armhf) die "暂无 armv7 官方预编译，请自行交叉编译或使用 LADDER_FROM=local" ;;
-    *) die "不支持的架构: ${m}（需要 amd64 或 arm64）" ;;
+    armv7l | armhf) echo "armhf" ;;
+    *) die "不支持的架构: ${m}（需要 amd64、arm64 或 armhf）" ;;
   esac
 }
 

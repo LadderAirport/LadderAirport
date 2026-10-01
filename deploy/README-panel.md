@@ -22,7 +22,7 @@ curl -fsSL https://raw.githubusercontent.com/LadderAirport/LadderAirport/main/sc
 
 | 步骤 | 内容 |
 |------|------|
-| 下载 | `panel-linux-amd64` 或 `arm64`（按 `uname -m`） |
+| 下载 | `panel-linux-amd64`、`panel-linux-arm64` 或 `panel-linux-armhf`（按 `uname -m`） |
 | 校验 | 若 Release 含 `SHA256SUMS.txt` 则自动校验 |
 | 安装 | `/usr/local/bin/ladder-panel` |
 | 配置 | `/etc/ladder-panel/panel.env`（已存在则不覆盖，仅补缺失键） |

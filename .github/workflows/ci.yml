@@ -58,8 +58,16 @@ jobs:
         include:
           - goos: linux
             goarch: amd64
+            suffix: amd64
           - goos: linux
             goarch: arm64
+            suffix: arm64
+          # armhf：GOARCH=arm、GOARM=7（Debian/Raspbian 硬浮点）。产物后缀用 armhf，
+          # 避免变成 linux-arm，安装脚本才能按 uname 对上文件名。
+          - goos: linux
+            goarch: arm
+            goarm: "7"
+            suffix: armhf
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -95,6 +103,7 @@ jobs:
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
+          GOARM: ${{ matrix.goarm }}
           VERSION: ${{ steps.ver.outputs.version }}
           GIT_COMMIT: ${{ steps.ver.outputs.commit }}
           BUILD_TIME: ${{ steps.ver.outputs.built_at }}
@@ -108,12 +117,13 @@ jobs:
           PANEL_LDFLAGS+=" -X github.com/ladderairport/agent/internal/version.Commit=${GIT_COMMIT}"
           PANEL_LDFLAGS+=" -X github.com/ladderairport/agent/internal/version.BuiltAt=${BUILD_TIME}"
           cd panel
-          go build -trimpath -ldflags="${PANEL_LDFLAGS}" -o ../dist/panel-${{ matrix.goos }}-${{ matrix.goarch }} ./cmd/panel
+          go build -trimpath -ldflags="${PANEL_LDFLAGS}" -o ../dist/panel-${{ matrix.goos }}-${{ matrix.suffix }} ./cmd/panel
 
       - name: Build ladder-agent
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
+          GOARM: ${{ matrix.goarm }}
           VERSION: ${{ steps.ver.outputs.version }}
           GIT_COMMIT: ${{ steps.ver.outputs.commit }}
           BUILD_TIME: ${{ steps.ver.outputs.built_at }}
@@ -129,12 +139,12 @@ jobs:
           cd agent
           go build -trimpath -tags "${AGENT_TAGS}" \
             -ldflags="-s -w ${AGENT_LDFLAGS}" \
-            -o ../dist/ladder-agent-${{ matrix.goos }}-${{ matrix.goarch }} ./cmd/ladder-agent
+            -o ../dist/ladder-agent-${{ matrix.goos }}-${{ matrix.suffix }} ./cmd/ladder-agent
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: binaries-${{ matrix.goos }}-${{ matrix.goarch }}
+          name: binaries-${{ matrix.goos }}-${{ matrix.suffix }}
           path: dist/*
           if-no-files-found: error
           retention-days: 14

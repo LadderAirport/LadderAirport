@@ -138,6 +138,21 @@ func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { retu
 
 // The "sums file missing" case must surface via the ErrReleaseSumsNotFound
 // sentinel, and only that case may match it.
+func TestReleaseArchSuffix(t *testing.T) {
+	if got := releaseArchSuffixFor("arm"); got != "armhf" {
+		t.Fatalf("arm = %q, want armhf", got)
+	}
+	if got := releaseArchSuffixFor("amd64"); got != "amd64" {
+		t.Fatalf("amd64 = %q", got)
+	}
+	if got := releaseArchSuffixFor("arm64"); got != "arm64" {
+		t.Fatalf("arm64 = %q", got)
+	}
+	if got := releaseArchSuffix(); got != releaseArchSuffixFor(runtime.GOARCH) {
+		t.Fatalf("releaseArchSuffix() = %q, want %q", got, releaseArchSuffixFor(runtime.GOARCH))
+	}
+}
+
 func TestVerifyAgainstReleaseSumsSentinel(t *testing.T) {
 	notFound := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
 		return &http.Response{
