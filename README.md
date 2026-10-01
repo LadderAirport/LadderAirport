@@ -79,7 +79,7 @@ make proto   # 由 proto/agent/v1/agent.proto 重新生成 gRPC 代码
 | `pkg/` `proto/` | 共享库与 gRPC 定义 |
 | `scripts/` `deploy/` | 安装脚本与 systemd 单元 |
 
-打 `v*` tag 会触发 Release 构建（linux/amd64 + arm64）。
+打 `v*` tag 会触发 Release 构建（linux/amd64、linux/arm64、linux/armhf）。
 
 ## 安全
 

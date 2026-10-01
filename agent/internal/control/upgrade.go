@@ -103,8 +103,7 @@ func StageAgentUpgrade(ctx context.Context, req UpgradeRequest) (*UpgradeResult,
 		}
 	}
 
-	arch := runtime.GOARCH
-	asset := fmt.Sprintf("ladder-agent-linux-%s", arch)
+	asset := fmt.Sprintf("ladder-agent-linux-%s", releaseArchSuffix())
 	tmpPath := filepath.Join(dir, asset+".partial")
 	finalPath := filepath.Join(dir, asset)
 	readyPath := finalPath + ".ready"
@@ -183,9 +182,22 @@ func StageAgentUpgrade(ctx context.Context, req UpgradeRequest) (*UpgradeResult,
 	}, nil
 }
 
+// releaseArchSuffix is the filename suffix of official Linux release assets
+// (ladder-agent-linux-<suffix>). runtime.GOARCH reports "arm" for the
+// GOARM=7 hard-float build, which is published as linux-armhf.
+func releaseArchSuffix() string {
+	return releaseArchSuffixFor(runtime.GOARCH)
+}
+
+func releaseArchSuffixFor(goarch string) string {
+	if goarch == "arm" {
+		return "armhf"
+	}
+	return goarch
+}
+
 func resolveReleaseURL(ctx context.Context, client *http.Client, repo, version string) (url, tag string, err error) {
-	arch := runtime.GOARCH
-	asset := fmt.Sprintf("ladder-agent-linux-%s", arch)
+	asset := fmt.Sprintf("ladder-agent-linux-%s", releaseArchSuffix())
 	version = strings.TrimSpace(version)
 	if version == "" || version == "latest" {
 		apiURL := fmt.Sprintf("%s/repos/%s/releases/latest", githubAPIBase, repo)
