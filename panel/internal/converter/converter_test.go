@@ -143,6 +143,73 @@ func TestConvertVMessGolden(t *testing.T) {
 	assertGolden(t, []store.InboundConfig{in}, "vmess.json")
 }
 
+func TestConvertHTTPGolden(t *testing.T) {
+	in := store.InboundConfig{
+		ID: "http-001", Name: "http-main", Protocol: "http", Enabled: true,
+		Params: map[string]any{
+			"listen": "0.0.0.0", "port": float64(8080),
+			"auth_mode": "password", "username": "alice", "password": "http-pass",
+		},
+	}
+	assertGolden(t, []store.InboundConfig{in}, "http.json")
+}
+
+func TestConvertSOCKS5Golden(t *testing.T) {
+	in := store.InboundConfig{
+		ID: "sk-001", Name: "socks-main", Protocol: "socks5", Enabled: true,
+		Params: map[string]any{
+			"listen": "0.0.0.0", "port": float64(1080),
+			"auth_mode": "password", "username": "bob", "password": "socks-pass",
+		},
+	}
+	assertGolden(t, []store.InboundConfig{in}, "socks5.json")
+}
+
+func TestConvertAutoGolden(t *testing.T) {
+	in := store.InboundConfig{
+		ID: "auto-001", Name: "auto-main", Protocol: "auto", Enabled: true,
+		Params: map[string]any{
+			"listen": "0.0.0.0", "port": float64(7890),
+			"auth_mode": "password", "username": "carol", "password": "auto-pass",
+		},
+	}
+	assertGolden(t, []store.InboundConfig{in}, "auto.json")
+}
+
+func TestConvertAutoNoAuth(t *testing.T) {
+	in := store.InboundConfig{
+		ID: "auto-002", Name: "auto-open", Protocol: "auto", Enabled: true,
+		Params: map[string]any{
+			"listen": "127.0.0.1", "port": float64(7891), "auth_mode": "none",
+		},
+	}
+	raw, err := Convert([]store.InboundConfig{in}, ConvertOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg map[string]any
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	inb := cfg["inbounds"].([]any)[0].(map[string]any)
+	if inb["type"] != "mixed" {
+		t.Fatalf("type = %v", inb["type"])
+	}
+	if _, ok := inb["users"]; ok {
+		t.Fatalf("none auth should omit users: %#v", inb)
+	}
+}
+
+func TestConvertInvalidAuthMode(t *testing.T) {
+	in := store.InboundConfig{
+		ID: "http-bad", Name: "http-bad", Protocol: "http", Enabled: true,
+		Params: map[string]any{"port": float64(8080), "auth_mode": "oops"},
+	}
+	if _, err := Convert([]store.InboundConfig{in}, ConvertOptions{}); err == nil {
+		t.Fatal("expected invalid auth_mode error")
+	}
+}
+
 func TestConvertEmptyError(t *testing.T) {
 	if _, err := Convert(nil, ConvertOptions{}); err == nil {
 		t.Fatal("expected error for empty list")

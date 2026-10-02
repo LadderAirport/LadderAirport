@@ -150,6 +150,17 @@ func TestApplyPanelProtocols(t *testing.T) {
 				"outbounds": []map[string]any{{"type": "direct", "tag": "direct"}},
 			},
 		},
+		{
+			name: "mixed-auto",
+			cfg: map[string]any{
+				"log": map[string]any{"level": "error", "disabled": true},
+				"inbounds": []map[string]any{{
+					"type": "mixed", "tag": "in-auto", "listen": "127.0.0.1", "listen_port": 28007,
+					"users": []map[string]any{{"username": "carol", "password": "p"}},
+				}},
+				"outbounds": []map[string]any{{"type": "direct", "tag": "direct"}},
+			},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

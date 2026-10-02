@@ -45,6 +45,10 @@ func renderOneShareURI(ep ProxyEndpoint) (string, error) {
 		return renderTUICURI(ep)
 	case "anytls":
 		return renderAnyTLSURI(ep)
+	case "http":
+		return renderHTTPOrSocksURI("http", ep)
+	case "socks5", "auto":
+		return renderHTTPOrSocksURI("socks5", ep)
 	default:
 		return "", fmt.Errorf("不支持协议 %q", ep.Protocol)
 	}
@@ -215,4 +219,15 @@ func renderAnyTLSURI(ep ProxyEndpoint) (string, error) {
 	}
 	u += "#" + url.QueryEscape(ep.Name)
 	return u, nil
+}
+
+func renderHTTPOrSocksURI(scheme string, ep ProxyEndpoint) (string, error) {
+	hp := formatHostPort(ep.Server, ep.Port)
+	user, _ := paramString(ep.Params, "username")
+	pass, _ := paramString(ep.Params, "password")
+	auth := ""
+	if user != "" || pass != "" {
+		auth = url.UserPassword(user, pass).String() + "@"
+	}
+	return fmt.Sprintf("%s://%s%s#%s", scheme, auth, hp, url.QueryEscape(ep.Name)), nil
 }

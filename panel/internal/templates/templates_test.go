@@ -2,10 +2,10 @@ package templates
 
 import "testing"
 
-func TestListReturnsSeven(t *testing.T) {
+func TestListReturnsTen(t *testing.T) {
 	list := List()
-	if len(list) != 7 {
-		t.Fatalf("List() len = %d, want 7", len(list))
+	if len(list) != 10 {
+		t.Fatalf("List() len = %d, want 10", len(list))
 	}
 	// Ensure copy is independent
 	list[0].Protocol = "mutated"
@@ -23,6 +23,9 @@ func TestGetEachProtocol(t *testing.T) {
 		"tuic":        "inbound.tuic.v1",
 		"anytls":      "inbound.anytls.v1",
 		"vmess":       "inbound.vmess.v1",
+		"http":        "inbound.http.v1",
+		"socks5":      "inbound.socks5.v1",
+		"auto":        "inbound.auto.v1",
 	}
 	for proto, id := range want {
 		tpl, ok := Get(proto)
@@ -90,5 +93,31 @@ func TestVLESSTLSMode(t *testing.T) {
 	}
 	if len(want) != 0 {
 		t.Fatalf("missing tls_mode options: %v", want)
+	}
+}
+
+func TestAutoAuthMode(t *testing.T) {
+	for _, proto := range []string{"http", "socks5", "auto"} {
+		tpl, ok := Get(proto)
+		if !ok {
+			t.Fatalf("Get(%q) missing", proto)
+		}
+		var auth Field
+		for _, f := range tpl.Fields {
+			if f.Name == "auth_mode" {
+				auth = f
+				break
+			}
+		}
+		if auth.Type != "select" || auth.Default != "password" {
+			t.Fatalf("%s auth_mode = %+v", proto, auth)
+		}
+		got := map[string]bool{}
+		for _, o := range auth.Options {
+			got[o] = true
+		}
+		if !got["password"] || !got["none"] {
+			t.Fatalf("%s auth options = %v", proto, auth.Options)
+		}
 	}
 }

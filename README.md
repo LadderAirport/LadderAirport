@@ -11,7 +11,7 @@
 ## 功能
 
 - **节点**：登记 / 探测 / 启停 / 远程升级，系统指标与 BBR 拥塞控制开关，卡片与表格总览；NAT 节点可选 uplink（见 [Agent 上行](docs/agent-uplink.md)）
-- **入站模板**：SS / Trojan / VLESS(Reality) / Hysteria2 / TUIC / AnyTLS / VMess
+- **入站模板**：SS / Trojan / VLESS(Reality) / Hysteria2 / TUIC / AnyTLS / VMess / HTTP / SOCKS5 / Auto(HTTP+SOCKS5)
 - **配置下发**：关联入站 → 完整 sing-box JSON → push 走 gRPC，uplink 等下次 HTTP 拉取；启动时自动同步并重试
 - **FRP Server**：节点内嵌 FRPS，Panel 加密保存认证令牌并独立下发、启停和查看状态
 - **订阅**：Clash / sing-box 链接，基础 CN 分流；可聚合外部机场订阅源；订阅令牌支持轮换与停用

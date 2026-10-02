@@ -49,6 +49,8 @@ func Fill(protocol string, params map[string]any) (map[string]any, error) {
 		return fillAnyTLS(params)
 	case "vmess":
 		return fillVMess(params)
+	case "http", "socks5", "auto":
+		return fillUserAuth(params)
 	default:
 		return params, nil
 	}
@@ -237,6 +239,41 @@ func fillVMess(params map[string]any) (map[string]any, error) {
 		return nil, fmt.Errorf("tls_mode %q 无效", mode)
 	}
 	return params, nil
+}
+
+func fillUserAuth(params map[string]any) (map[string]any, error) {
+	if empty(params, "listen") {
+		params["listen"] = "0.0.0.0"
+	}
+	if empty(params, "auth_mode") {
+		params["auth_mode"] = "password"
+	}
+	switch str(params, "auth_mode") {
+	case "none":
+		return params, nil
+	case "password":
+		if err := ensureUsername(params); err != nil {
+			return nil, err
+		}
+		if err := ensurePassword(params); err != nil {
+			return nil, err
+		}
+		return params, nil
+	default:
+		return nil, fmt.Errorf("auth_mode %q 无效", str(params, "auth_mode"))
+	}
+}
+
+func ensureUsername(params map[string]any) error {
+	if !empty(params, "username") {
+		return nil
+	}
+	b := make([]byte, 4)
+	if _, err := rand.Read(b); err != nil {
+		return fmt.Errorf("生成用户名失败：%w", err)
+	}
+	params["username"] = "user-" + hex.EncodeToString(b)
+	return nil
 }
 
 func ensurePassword(params map[string]any) error {

@@ -58,6 +58,10 @@ func parseOneShareURI(raw string) (ProxyEndpoint, error) {
 		return parseTUICURI(raw)
 	case "anytls":
 		return parseAnyTLSURI(raw)
+	case "http":
+		return parseHTTPOrSocksURI(raw, "http")
+	case "socks", "socks5":
+		return parseHTTPOrSocksURI(raw, "socks5")
 	default:
 		return ProxyEndpoint{}, fmt.Errorf("不支持链接方案 %q", scheme)
 	}
@@ -369,6 +373,36 @@ func parseAnyTLSURI(raw string) (ProxyEndpoint, error) {
 		Protocol:      "anytls",
 		Params:        params,
 		TLSSkipVerify: allowInsecureFromQuery(u.Query()),
+	}, nil
+}
+
+func parseHTTPOrSocksURI(raw, protocol string) (ProxyEndpoint, error) {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return ProxyEndpoint{}, err
+	}
+	host := u.Hostname()
+	port, err := strconv.Atoi(u.Port())
+	if err != nil || host == "" || port < 1 || port > 65535 {
+		return ProxyEndpoint{}, fmt.Errorf("%s 链接缺少主机或端口", protocol)
+	}
+	params := map[string]any{}
+	username, password := "", ""
+	if u.User != nil {
+		username = u.User.Username()
+		password, _ = u.User.Password()
+	}
+	applyParsedUserAuth(params, username, password)
+	name := fragmentName(u)
+	if name == "" {
+		name = fmt.Sprintf("%s-%s-%d", protocol, host, port)
+	}
+	return ProxyEndpoint{
+		Name:     sanitizeName(name),
+		Server:   host,
+		Port:     port,
+		Protocol: protocol,
+		Params:   params,
 	}, nil
 }
 

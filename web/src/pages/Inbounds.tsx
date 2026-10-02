@@ -650,6 +650,8 @@ function formatSecrets(params: Record<string, unknown> | null | undefined): stri
     'port',
     'method',
     'password',
+    'username',
+    'auth_mode',
     'uuid',
     'tls_mode',
     'private_key',

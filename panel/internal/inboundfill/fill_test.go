@@ -181,6 +181,47 @@ func TestFillVMess(t *testing.T) {
 	}
 }
 
+func TestFillUserAuthProtocols(t *testing.T) {
+	for _, proto := range []string{"http", "socks5", "auto"} {
+		p, err := inboundfill.Fill(proto, map[string]any{"port": 1080})
+		if err != nil {
+			t.Fatalf("%s: %v", proto, err)
+		}
+		if p["auth_mode"] != "password" {
+			t.Fatalf("%s auth_mode = %v", proto, p["auth_mode"])
+		}
+		if str(p, "username") == "" || str(p, "password") == "" {
+			t.Fatalf("%s missing credentials: %+v", proto, p)
+		}
+		if p["listen"] != "0.0.0.0" {
+			t.Fatalf("%s listen = %v", proto, p["listen"])
+		}
+
+		p2, err := inboundfill.Fill(proto, map[string]any{
+			"port": 1080, "auth_mode": "none",
+		})
+		if err != nil {
+			t.Fatalf("%s none: %v", proto, err)
+		}
+		if str(p2, "username") != "" || str(p2, "password") != "" {
+			t.Fatalf("%s none should not generate credentials: %+v", proto, p2)
+		}
+
+		p3, err := inboundfill.Fill(proto, map[string]any{
+			"port": 1080, "username": "keep", "password": "me",
+		})
+		if err != nil {
+			t.Fatalf("%s preserve: %v", proto, err)
+		}
+		if p3["username"] != "keep" || p3["password"] != "me" {
+			t.Fatalf("%s preserved = %+v", proto, p3)
+		}
+	}
+	if _, err := inboundfill.Fill("auto", map[string]any{"port": 1, "auth_mode": "oops"}); err == nil {
+		t.Fatal("expected invalid auth_mode error")
+	}
+}
+
 func str(m map[string]any, k string) string {
 	v, _ := m[k].(string)
 	return v

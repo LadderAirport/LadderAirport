@@ -111,6 +111,7 @@ func looksLikeShareLinks(b []byte) bool {
 	for _, scheme := range []string{
 		"ss://", "vmess://", "vless://", "trojan://",
 		"hysteria2://", "hy2://", "tuic://", "anytls://",
+		"socks5://", "socks://",
 	} {
 		if strings.Contains(s, scheme) {
 			return true
@@ -172,6 +173,20 @@ func isMostlyPrintable(b []byte) bool {
 		}
 	}
 	return bad*10 < len(b) // <10% control bytes
+}
+
+func applyParsedUserAuth(params map[string]any, username, password string) {
+	if username != "" {
+		params["username"] = username
+	}
+	if password != "" {
+		params["password"] = password
+	}
+	if username != "" || password != "" {
+		params["auth_mode"] = "password"
+	} else {
+		params["auth_mode"] = "none"
+	}
 }
 
 func anyToString(v any) string {

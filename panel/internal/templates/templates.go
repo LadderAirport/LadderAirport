@@ -156,6 +156,40 @@ var builtins = []Template{
 			{Name: "server_name", Label: "Server Name (SNI)", Type: "string", Required: false},
 		},
 	},
+	{
+		ID:       "inbound.http.v1",
+		Protocol: "http",
+		Name:     "HTTP",
+		Fields:   userAuthInboundFields("HTTP CONNECT 代理"),
+	},
+	{
+		ID:       "inbound.socks5.v1",
+		Protocol: "socks5",
+		Name:     "SOCKS5",
+		Fields:   userAuthInboundFields("SOCKS5 代理"),
+	},
+	{
+		ID:       "inbound.auto.v1",
+		Protocol: "auto",
+		Name:     "Auto (HTTP/SOCKS5)",
+		Fields:   userAuthInboundFields("同一端口自动识别 HTTP 与 SOCKS5"),
+	},
+}
+
+func userAuthInboundFields(description string) []Field {
+	return []Field{
+		{Name: "listen", Label: "Listen", Type: "string", Required: false, Default: "0.0.0.0"},
+		{Name: "port", Label: "Port", Type: "int", Required: true},
+		{
+			Name:        "auth_mode",
+			Label:       "Auth",
+			Type:        "select",
+			Required:    false,
+			Default:     "password",
+			Options:     []string{"password", "none"},
+			Description: description + "；password 模式自动生成用户名和密码",
+		},
+	}
 }
 
 // List returns all built-in protocol templates.

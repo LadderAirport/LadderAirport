@@ -233,7 +233,7 @@ type NodeInboundBinding struct {
 type InboundConfig struct {
 	ID            string         `json:"id"`
 	Name          string         `json:"name"`
-	Protocol      string         `json:"protocol"` // shadowsocks|trojan|vless|hysteria2|tuic|anytls|vmess
+	Protocol      string         `json:"protocol"` // shadowsocks|trojan|vless|hysteria2|tuic|anytls|vmess|http|socks5|auto
 	Params        map[string]any `json:"params"`
 	Enabled       bool           `json:"enabled"`
 	CreatedAtUnix int64          `json:"created_at_unix"`

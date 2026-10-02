@@ -1,0 +1,28 @@
+{
+  "log": {
+    "level": "info"
+  },
+  "inbounds": [
+    {
+      "type": "mixed",
+      "tag": "in-auto-main-auto001",
+      "listen": "0.0.0.0",
+      "listen_port": 7890,
+      "users": [
+        {
+          "username": "carol",
+          "password": "auto-pass"
+        }
+      ]
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "direct",
+      "tag": "direct"
+    }
+  ],
+  "route": {
+    "final": "direct"
+  }
+}

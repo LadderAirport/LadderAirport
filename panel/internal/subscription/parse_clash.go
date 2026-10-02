@@ -169,6 +169,12 @@ func clashMapToEndpoint(m map[string]any) (ProxyEndpoint, error) {
 		if sn := firstNonEmpty(anyToString(m["servername"]), anyToString(m["sni"])); sn != "" {
 			params["server_name"] = sn
 		}
+	case "http":
+		protocol = "http"
+		applyParsedUserAuth(params, anyToString(m["username"]), anyToString(m["password"]))
+	case "socks", "socks5":
+		protocol = "socks5"
+		applyParsedUserAuth(params, anyToString(m["username"]), anyToString(m["password"]))
 	default:
 		return ProxyEndpoint{}, fmt.Errorf("不支持类型 %q", typ)
 	}

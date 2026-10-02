@@ -42,7 +42,7 @@ func singboxMapToEndpoint(m map[string]any) (ProxyEndpoint, error) {
 	typ := strings.ToLower(anyToString(m["type"]))
 	switch typ {
 	case "selector", "urltest", "direct", "block", "dns", "tor", "ssh",
-		"wireguard", "hysteria", "shadowtls", "socks", "http", "naive",
+		"wireguard", "hysteria", "shadowtls", "naive",
 		"redirect", "tproxy", "tun", "mixed", "shadowsocks-legacy":
 		return ProxyEndpoint{}, fmt.Errorf("跳过类型 %s", typ)
 	}
@@ -137,6 +137,12 @@ func singboxMapToEndpoint(m map[string]any) (ProxyEndpoint, error) {
 			params["alter_id"] = aid
 		}
 		applySingboxTLS(m, params)
+	case "http":
+		protocol = "http"
+		applyParsedUserAuth(params, anyToString(m["username"]), anyToString(m["password"]))
+	case "socks":
+		protocol = "socks5"
+		applyParsedUserAuth(params, anyToString(m["username"]), anyToString(m["password"]))
 	default:
 		return ProxyEndpoint{}, fmt.Errorf("不支持类型 %q", typ)
 	}

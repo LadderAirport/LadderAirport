@@ -688,6 +688,13 @@ func clashProxy(ep ProxyEndpoint) (map[string]any, error) {
 		default:
 			return nil, fmt.Errorf("不支持 tls_mode %q", mode)
 		}
+	case "http":
+		p["type"] = "http"
+		applyProxyUserAuth(p, ep.Params)
+	case "socks5", "auto":
+		p["type"] = "socks5"
+		applyProxyUserAuth(p, ep.Params)
+		p["udp"] = ep.Params["frp_enabled"] != true
 	default:
 		return nil, fmt.Errorf("不支持协议 %q", ep.Protocol)
 	}
@@ -855,10 +862,29 @@ func SingboxOutbound(ep ProxyEndpoint) (map[string]any, error) {
 		default:
 			return nil, fmt.Errorf("不支持 tls_mode %q", mode)
 		}
+	case "http":
+		o["type"] = "http"
+		applyProxyUserAuth(o, ep.Params)
+	case "socks5", "auto":
+		o["type"] = "socks"
+		o["version"] = "5"
+		applyProxyUserAuth(o, ep.Params)
+		if ep.Params["frp_enabled"] == true {
+			o["network"] = "tcp"
+		}
 	default:
 		return nil, fmt.Errorf("不支持协议 %q", ep.Protocol)
 	}
 	return o, nil
+}
+
+func applyProxyUserAuth(dst map[string]any, params map[string]any) {
+	if user, ok := paramString(params, "username"); ok {
+		dst["username"] = user
+	}
+	if pass, ok := paramString(params, "password"); ok {
+		dst["password"] = pass
+	}
 }
 
 // Kept for package-local compatibility with existing tests and callers.

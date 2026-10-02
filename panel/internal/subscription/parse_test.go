@@ -15,9 +15,15 @@ proxies:
     port: 8388
     cipher: aes-256-gcm
     password: secret
-  - name: bad
+  - name: lan-http
     type: http
     server: 9.9.9.9
+    port: 8080
+    username: alice
+    password: secret
+  - name: bad
+    type: ssr
+    server: 8.8.8.8
     port: 80
 `)
 	eps, kind, err := DetectAndParse(raw)
@@ -27,8 +33,14 @@ proxies:
 	if kind != ContentClashYAML {
 		t.Fatalf("kind=%s", kind)
 	}
-	if len(eps) != 1 || eps[0].Protocol != "shadowsocks" || eps[0].Port != 8388 {
+	if len(eps) != 2 {
 		t.Fatalf("%+v", eps)
+	}
+	if eps[0].Protocol != "shadowsocks" || eps[0].Port != 8388 {
+		t.Fatalf("%+v", eps[0])
+	}
+	if eps[1].Protocol != "http" || eps[1].Params["username"] != "alice" {
+		t.Fatalf("%+v", eps[1])
 	}
 }
 

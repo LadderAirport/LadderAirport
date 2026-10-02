@@ -194,6 +194,12 @@ func mapInbound(in store.InboundConfig) (map[string]any, error) {
 		return mapAnyTLS(in)
 	case "vmess":
 		return mapVMess(in)
+	case "http":
+		return mapUserAuthInbound(in, "http")
+	case "socks5":
+		return mapUserAuthInbound(in, "socks")
+	case "auto":
+		return mapUserAuthInbound(in, "mixed")
 	default:
 		return nil, fmt.Errorf("不支持协议 %q", in.Protocol)
 	}
@@ -520,6 +526,42 @@ func mapVMess(in store.InboundConfig) (map[string]any, error) {
 		return nil, fmt.Errorf("tls_mode %q 无效", tlsMode)
 	}
 	return out, nil
+}
+
+func mapUserAuthInbound(in store.InboundConfig, singboxType string) (map[string]any, error) {
+	listen, port, err := requireListenPort(in.Params)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]any{
+		"type":        singboxType,
+		"tag":         inboundTag(in),
+		"listen":      listen,
+		"listen_port": port,
+	}
+	authMode := optionalString(in.Params, "auth_mode")
+	if authMode == "" {
+		authMode = "password"
+	}
+	switch authMode {
+	case "none":
+		return out, nil
+	case "password":
+		username, err := requireString(in.Params, "username")
+		if err != nil {
+			return nil, err
+		}
+		password, err := requireString(in.Params, "password")
+		if err != nil {
+			return nil, err
+		}
+		out["users"] = []map[string]any{
+			{"username": username, "password": password},
+		}
+		return out, nil
+	default:
+		return nil, fmt.Errorf("auth_mode %q 无效", authMode)
+	}
 }
 
 func asBool(v any) (bool, bool) {

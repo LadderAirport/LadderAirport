@@ -203,13 +203,28 @@ func TestRenderNewProtocols(t *testing.T) {
 				"alter_id": float64(0), "tls_mode": "tls", "server_name": "v.example.com",
 			},
 		},
+		{
+			Name: "n-http", Server: "1.1.1.1", Port: 8080, Protocol: "http",
+			Params: map[string]any{"username": "alice", "password": "p"},
+		},
+		{
+			Name: "n-socks", Server: "1.1.1.1", Port: 1080, Protocol: "socks5",
+			Params: map[string]any{"username": "bob", "password": "p"},
+		},
+		{
+			Name: "n-auto", Server: "1.1.1.1", Port: 7890, Protocol: "auto",
+			Params: map[string]any{"username": "carol", "password": "p"},
+		},
 	}
 	clash, err := RenderClash(eps)
 	if err != nil {
 		t.Fatal(err)
 	}
 	cs := string(clash)
-	for _, want := range []string{"type: tuic", "type: anytls", "type: vmess", "congestion-controller: bbr"} {
+	for _, want := range []string{
+		"type: tuic", "type: anytls", "type: vmess", "congestion-controller: bbr",
+		"type: http", "type: socks5", "username: alice", "username: bob", "username: carol",
+	} {
 		if !strings.Contains(cs, want) {
 			t.Fatalf("clash missing %q in:\n%s", want, cs)
 		}
@@ -219,10 +234,40 @@ func TestRenderNewProtocols(t *testing.T) {
 		t.Fatal(err)
 	}
 	ss := string(sb)
-	for _, want := range []string{`"type": "tuic"`, `"type": "anytls"`, `"type": "vmess"`, `"congestion_control": "bbr"`} {
+	for _, want := range []string{
+		`"type": "tuic"`, `"type": "anytls"`, `"type": "vmess"`, `"congestion_control": "bbr"`,
+		`"type": "http"`, `"type": "socks"`, `"username": "alice"`, `"username": "carol"`,
+	} {
 		if !strings.Contains(ss, want) {
 			t.Fatalf("singbox missing %q in:\n%s", want, ss)
 		}
+	}
+}
+
+func TestRenderHTTPSocksShareAndFRP(t *testing.T) {
+	httpEP := ProxyEndpoint{
+		Name: "lan-http", Server: "10.0.0.1", Port: 8080, Protocol: "http",
+		Params: map[string]any{"username": "alice", "password": "secret"},
+	}
+	autoFRP := ProxyEndpoint{
+		Name: "lan-auto", Server: "frps.example.com", Port: 20001, Protocol: "auto",
+		Params: map[string]any{"username": "carol", "password": "secret", "frp_enabled": true},
+	}
+	clash, err := clashProxy(autoFRP)
+	if err != nil || clash["type"] != "socks5" || clash["udp"] != false {
+		t.Fatalf("auto FRP clash = %#v err=%v", clash, err)
+	}
+	sb, err := SingboxOutbound(autoFRP)
+	if err != nil || sb["type"] != "socks" || sb["network"] != "tcp" {
+		t.Fatalf("auto FRP singbox = %#v err=%v", sb, err)
+	}
+	uri, err := renderOneShareURI(httpEP)
+	if err != nil || !strings.HasPrefix(uri, "http://") || !strings.Contains(uri, "alice") {
+		t.Fatalf("http uri = %q err=%v", uri, err)
+	}
+	uri2, err := renderOneShareURI(autoFRP)
+	if err != nil || !strings.HasPrefix(uri2, "socks5://") {
+		t.Fatalf("auto uri = %q err=%v", uri2, err)
 	}
 }
 
