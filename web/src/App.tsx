@@ -60,6 +60,7 @@ function AppLayout() {
   const location = useLocation()
   const [ready, setReady] = useState(false)
   const [authed, setAuthed] = useState(false)
+  const [bootError, setBootError] = useState('')
   const [loggingOut, setLoggingOut] = useState(false)
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
     return document.documentElement.classList.contains('dark') ? 'dark' : 'light'
@@ -81,28 +82,30 @@ function AppLayout() {
     return `/login?next=${encodeURIComponent(next)}`
   }, [location.pathname, location.search])
 
-  useEffect(() => {
-    let cancelled = false
-    ;(async () => {
-      try {
-        await listNodes()
-        if (!cancelled) setAuthed(true)
-      } catch (err) {
-        if (!cancelled) {
-          setAuthed(!(err instanceof ApiError && err.status === 401))
-        }
-      } finally {
-        if (!cancelled) setReady(true)
+  const checkSession = useCallback(async () => {
+    setReady(false)
+    setBootError('')
+    try {
+      await listNodes()
+      setAuthed(true)
+    } catch (err) {
+      setAuthed(false)
+      if (!(err instanceof ApiError && err.status === 401)) {
+        setBootError(err instanceof Error ? err.message : '无法连接控制面')
       }
-    })()
-    return () => {
-      cancelled = true
+    } finally {
+      setReady(true)
     }
   }, [])
 
   useEffect(() => {
+    void checkSession()
+  }, [checkSession])
+
+  useEffect(() => {
     const onExpired = () => {
       setAuthed(false)
+      setBootError('')
       setReady(true)
       navigate(loginPath(), { replace: true })
     }
@@ -111,8 +114,8 @@ function AppLayout() {
   }, [loginPath, navigate])
 
   useEffect(() => {
-    if (ready && !authed) navigate(loginPath(), { replace: true })
-  }, [ready, authed, loginPath, navigate])
+    if (ready && !authed && !bootError) navigate(loginPath(), { replace: true })
+  }, [ready, authed, bootError, loginPath, navigate])
 
   const active = useMemo(() => {
     const path = location.pathname
@@ -160,6 +163,18 @@ function AppLayout() {
       <div className="flex flex-col gap-3 items-center justify-center min-h-screen bg-background text-muted-foreground">
         <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
         <span className="text-sm font-medium">正在验证会话…</span>
+      </div>
+    )
+  }
+
+  if (bootError) {
+    return (
+      <div className="flex flex-col gap-4 items-center justify-center min-h-screen bg-background px-6 text-center">
+        <p className="text-sm font-medium text-foreground">无法连接控制面</p>
+        <p className="text-xs text-muted-foreground max-w-md">{bootError}</p>
+        <Button onClick={() => void checkSession()} className="cursor-pointer">
+          重试
+        </Button>
       </div>
     )
   }

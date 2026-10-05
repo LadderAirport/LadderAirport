@@ -375,7 +375,7 @@ export default function Inbounds() {
                   </Label>
                   <Select
                     disabled={busy || loading || !!editingId}
-                    value={protocol}
+                    value={protocol || undefined}
                     onValueChange={(val) => onProtocolChange(val)}
                   >
                     <SelectTrigger className="h-9" id="inbound-protocol">

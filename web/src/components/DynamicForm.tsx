@@ -75,7 +75,7 @@ export default function DynamicForm({
 
         return (
           <div className="flex flex-col space-y-2" key={f.name}>
-            <Label htmlFor={`field-${f.name}`} className="text-sm font-medium text-zinc-300">
+            <Label htmlFor={`field-${f.name}`} className="text-sm font-medium text-foreground">
               {f.label}
               {f.required ? <span className="text-red-500"> *</span> : null}
             </Label>
@@ -118,7 +118,7 @@ function renderInput(
             disabled={disabled}
             className={cn(
               error ? 'border-red-500 focus-visible:ring-red-500' : '',
-              isPort ? 'pr-10 bg-zinc-950 border-zinc-800 focus-visible:ring-zinc-700' : ''
+              isPort ? 'pr-10' : ''
             )}
             value={current === '' || current == null ? '' : Number(current)}
             onChange={(e) => {
@@ -136,7 +136,7 @@ function renderInput(
                 const randPort = Math.floor(Math.random() * (65535 - 10000 + 1)) + 10000
                 setField(f.name, randPort)
               }}
-              className="absolute right-1 p-1.5 text-zinc-400 hover:text-zinc-200 bg-zinc-900/50 hover:bg-zinc-800 rounded transition-colors disabled:opacity-50 disabled:pointer-events-none cursor-pointer h-7 w-7 flex items-center justify-center select-none"
+              className="absolute right-1 p-1.5 text-muted-foreground hover:text-foreground bg-muted/60 hover:bg-muted rounded transition-colors disabled:opacity-50 disabled:pointer-events-none cursor-pointer h-7 w-7 flex items-center justify-center select-none"
               title="随机生成高端口"
             >
               <Dices className="h-4 w-4" />

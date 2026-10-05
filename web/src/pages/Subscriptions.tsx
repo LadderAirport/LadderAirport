@@ -293,9 +293,7 @@ export default function Subscriptions() {
         ? 'none'
         : includeAll
           ? 'all'
-          : subscription.inbound_ids.length
-            ? 'custom'
-            : 'none',
+          : 'custom',
       inboundIds: new Set(subscription.inbound_ids ?? []),
       includeAllChains: subscription.include_all_chains ?? false,
       chainIds: new Set(subscription.chain_ids ?? []),
@@ -735,16 +733,16 @@ export default function Subscriptions() {
 
           {loading && subscriptions.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-16 space-y-3">
-              <RefreshCw className="h-6 w-6 animate-spin text-zinc-500" />
-              <span className="text-sm text-zinc-400">正在加载订阅分发列表…</span>
+              <RefreshCw className="h-6 w-6 animate-spin text-muted-foreground" />
+              <span className="text-sm text-muted-foreground">正在加载订阅分发列表…</span>
             </div>
           ) : subscriptions.length === 0 ? (
-            <Card className="border-zinc-900 bg-zinc-900/20 py-12 text-center">
+            <Card className="border-border bg-card py-12 text-center">
               <CardContent className="space-y-3">
-                <Rss className="h-10 w-10 text-zinc-700 mx-auto" />
+                <Rss className="h-10 w-10 text-muted-foreground mx-auto" />
                 <div className="space-y-1">
-                  <h3 className="text-base font-semibold text-zinc-300">暂无已发布的订阅</h3>
-                  <p className="text-xs text-zinc-500 max-w-sm mx-auto">
+                  <h3 className="text-base font-semibold text-foreground">暂无已发布的订阅</h3>
+                  <p className="text-xs text-muted-foreground max-w-sm mx-auto">
                     点击右上角“新建订阅”按钮，创建一个支持 Clash 或 sing-box 的公网订阅链接。
                   </p>
                 </div>
@@ -1155,7 +1153,7 @@ export default function Subscriptions() {
             </div>
 
             <div className="space-y-2 pt-2 border-t border-border">
-              <Label className="text-xs text-muted-foreground block">包含本地节点范围</Label>
+              <Label className="text-xs text-muted-foreground block">包含本地入站范围</Label>
               <div className="grid grid-cols-3 gap-2">
                 <button
                   type="button"
@@ -1166,7 +1164,7 @@ export default function Subscriptions() {
                       : 'border-border bg-muted/40 text-muted-foreground hover:text-foreground'
                   }`}
                 >
-                  包含全部节点
+                  包含全部入站
                 </button>
                 <button
                   type="button"
@@ -1177,7 +1175,7 @@ export default function Subscriptions() {
                       : 'border-border bg-muted/40 text-muted-foreground hover:text-foreground'
                   }`}
                 >
-                  选择指定节点
+                  选择指定入站
                 </button>
                 <button
                   type="button"
@@ -1188,7 +1186,7 @@ export default function Subscriptions() {
                       : 'border-border bg-muted/40 text-muted-foreground hover:text-foreground'
                   }`}
                 >
-                  不包含本地节点
+                  不包含本地入站
                 </button>
               </div>
 

@@ -79,6 +79,29 @@ export default function ProxyChains() {
     [nodes],
   )
 
+  const inboundUsedByOtherChain = useMemo(() => {
+    const used = new Set<string>()
+    for (const chain of chains) {
+      if (editor.id && chain.id === editor.id) continue
+      for (const hop of chain.hops ?? []) {
+        if (hop.inbound_id) used.add(hop.inbound_id)
+      }
+    }
+    return used
+  }, [chains, editor.id])
+
+  function inboundOptionsForHop(currentInboundId: string) {
+    const selectedHere = new Set(
+      editor.hops.map((hop) => hop.inbound_id).filter((id) => id && id !== currentInboundId),
+    )
+    return inbounds.filter((inbound) => {
+      if (inbound.id === currentInboundId) return true
+      if (!inbound.enabled) return false
+      if (inboundUsedByOtherChain.has(inbound.id) || selectedHere.has(inbound.id)) return false
+      return true
+    })
+  }
+
   const load = useCallback(async () => {
     setLoading(true)
     setLoadError('')
@@ -449,8 +472,13 @@ export default function ProxyChains() {
                         onChange={(event) => updateHop(index, { inbound_id: event.target.value })}
                         className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground disabled:opacity-50"
                       >
-                        <option value="">请选择本节点专用入站…</option>
-                        {inbounds.map((inbound) => <option key={inbound.id} value={inbound.id}>{inbound.name} ({inbound.protocol.toUpperCase()})</option>)}
+                        <option value="">请选择链专用入站…</option>
+                        {inboundOptionsForHop(hop.inbound_id).map((inbound) => (
+                          <option key={inbound.id} value={inbound.id}>
+                            {inbound.name} ({inbound.protocol.toUpperCase()}
+                            {inbound.enabled ? '' : ' · 已禁用'})
+                          </option>
+                        ))}
                       </select>
                     </div>
                     <div className="space-y-1">

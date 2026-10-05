@@ -9,6 +9,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs'
 import { Badge } from './ui/badge'
 import { StatusBadge } from './ui/status-badge'
 import { Alert, AlertDescription, AlertTitle } from './ui/alert'
+import { ConfirmModal } from './ui/confirm-modal'
 import { RefreshCw } from 'lucide-react'
 import {
   applyNode,
@@ -217,6 +218,11 @@ export default function NodeDetailDrawer({ nodeId, onClose, onChanged }: Props) 
   const [frpsMappings, setFRPSMappings] = useState<FRPServerMappings | null>(null)
   const [frpsMappingsLoading, setFRPSMappingsLoading] = useState(false)
   const [frpsMappingsError, setFRPSMappingsError] = useState('')
+  const [closeConfirm, setCloseConfirm] = useState(false)
+
+  useEffect(() => {
+    if (!open) setCloseConfirm(false)
+  }, [open])
 
   const isCurrentNode = useCallback(
     (targetId: string, generation: number) =>
@@ -460,8 +466,6 @@ export default function NodeDetailDrawer({ nodeId, onClose, onChanged }: Props) 
 
     const errors: ConnectionErrors = {}
     if (!name) errors.name = '请填写节点名称'
-    const nameErr = hostValidationError(name, '节点名称')
-    if (nameErr) errors.name = nameErr
     if (editControlMode !== 'uplink') {
       const addrErr = hostValidationError(address, '控制面地址')
       if (addrErr) errors.address = addrErr
@@ -532,6 +536,10 @@ export default function NodeDetailDrawer({ nodeId, onClose, onChanged }: Props) 
   const onSaveTLS = async (inboundId: string) => {
     const binding = tlsBindings[inboundId]
     if (!binding || busy) return
+    if (binding.mode === 'managed' && !binding.certificate_id) {
+      toast.warning('请先选择一张可用的托管证书')
+      return
+    }
     setTLSBusy(inboundId)
     try {
       const certificate = binding.mode === 'managed'
@@ -819,13 +827,38 @@ export default function NodeDetailDrawer({ nodeId, onClose, onChanged }: Props) 
     }
   }
 
+  const connectionDirty = Boolean(
+    node &&
+      (editName.trim() !== (node.name || '') ||
+        editAddress.trim() !== (node.address || '') ||
+        Number(editPort) !== (node.grpc_port || 50051) ||
+        editPublic.trim() !== (node.public_address || '') ||
+        editEgress !== (node.egress_interface || '') ||
+        editDDNS !== (node.ddns_enabled !== false) ||
+        editControlMode !== (node.control_mode || 'push') ||
+        editTokenChanged ||
+        JSON.stringify(editLabels) !== JSON.stringify(node.labels || [])),
+  )
+  const inboundsDirty = JSON.stringify(inboundNAT) !== JSON.stringify(savedInboundNAT)
+  const drawerDirty = connectionDirty || inboundsDirty || frpsDirty
+
+  const requestClose = () => {
+    if (busy) return
+    if (drawerDirty) {
+      setCloseConfirm(true)
+      return
+    }
+    onClose()
+  }
+
   const attachedCount = Object.keys(inboundNAT).length
   const mappingCount = Object.values(inboundNAT).filter(
     (nat) => nat.public_address.trim() || nat.public_port > 0,
   ).length
 
   return (
-    <Dialog open={open} onOpenChange={(v) => { if (!v) onClose() }}>
+    <>
+    <Dialog open={open} onOpenChange={(v) => { if (!v) requestClose() }}>
       <DialogContent className="max-w-4xl w-[92vw] h-[85vh] max-h-[85vh] bg-background border-border text-foreground p-0 flex flex-col focus-visible:outline-none overflow-hidden sm:rounded-lg shadow-2xl">
         {loading ? (
           <div className="flex flex-col items-center justify-center flex-1 space-y-3">
@@ -1049,5 +1082,18 @@ export default function NodeDetailDrawer({ nodeId, onClose, onChanged }: Props) 
         )}
       </DialogContent>
     </Dialog>
+    <ConfirmModal
+      open={closeConfirm}
+      title="放弃未保存的修改？"
+      description="节点连接、入站关联或 FRPS 草稿尚未保存，关闭后会丢失这些更改。"
+      confirmText="放弃并关闭"
+      confirmVariant="destructive"
+      onConfirm={() => {
+        setCloseConfirm(false)
+        onClose()
+      }}
+      onCancel={() => setCloseConfirm(false)}
+    />
+    </>
   )
 }

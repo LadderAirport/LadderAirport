@@ -14,6 +14,8 @@ import type {
   ProtocolCertificate,
 } from '@/api/client'
 
+const TLS_CERT_UNSET = '__unset__'
+
 export interface InboundNATEdit {
   public_address: string
   public_port: number
@@ -263,9 +265,10 @@ export function NodeInboundsTab({
 
                             {tlsBinding.mode === 'managed' ? (
                               <Select
-                                value={tlsBinding.certificate_id || ''}
+                                value={tlsBinding.certificate_id || TLS_CERT_UNSET}
                                 disabled={!attached || tlsBusy === inb.id}
                                 onValueChange={(certificateId) => {
+                                  if (certificateId === TLS_CERT_UNSET) return
                                   setTLSBindings((current) => ({
                                     ...current,
                                     [inb.id]: {
@@ -281,6 +284,11 @@ export function NodeInboundsTab({
                                   <SelectValue placeholder="选择协议证书…" />
                                 </SelectTrigger>
                                 <SelectContent className="bg-popover border-border">
+                                  {availableCertificates.length === 0 && (
+                                    <SelectItem value={TLS_CERT_UNSET} disabled>
+                                      暂无可用证书
+                                    </SelectItem>
+                                  )}
                                   {availableCertificates.map((cert) => (
                                     <SelectItem key={cert.id} value={cert.id}>
                                       {cert.domains.join(', ')} (r{cert.revision})
@@ -296,7 +304,7 @@ export function NodeInboundsTab({
 
                             <Button
                               size="sm"
-                              disabled={!attached || tlsBusy === inb.id}
+                              disabled={!attached || tlsBusy === inb.id || (tlsBinding.mode === 'managed' && !tlsBinding.certificate_id)}
                               loading={tlsBusy === inb.id}
                               onClick={() => onSaveTLS(inb.id)}
                               className="h-8 text-xs"
