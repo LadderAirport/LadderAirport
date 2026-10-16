@@ -43,7 +43,11 @@ uplink 模式反过来由 Agent 主动出站访问 Panel：HTTP 上报，再用 
   "runtime_state": "running",
   "config_hash": "...",
   "last_error": "",
-  "agent_version": "...",
+  "agent_version": "v0.15.12",
+  "core_version": "v0.15.12",
+  "core_commit": "2372916",
+  "client_type": "linux",
+  "client_version": "v0.15.12",
   "singbox_version": "...",
   "capabilities": ["uplink-v1", "..."],
   "connections": 12,
@@ -57,7 +61,8 @@ uplink 模式反过来由 Agent 主动出站访问 Panel：HTTP 上报，再用 
 Panel 侧 `ApplyNodeReport` 的处理要点：
 
 - **单调时间戳防乱序**：仅当 `collected_at_unix >= 已记录的 uplink_last_seen_unix` 才写入，旧样本直接丢弃（响应 `applied=false`）。允许最多 300 秒时钟偏移，超前太多的时间戳拒绝。
-- **部分更新**：用 SQL `CASE WHEN` 只更新本次真正带上来的列（能力、指标、配置哈希、版本各自独立判断），避免一次心跳把其它字段清空。
+- **部分更新**：用 SQL `CASE WHEN` 只更新本次真正带上来的列（能力、指标、配置哈希、版本各自独立判断），避免一次心跳把其它字段清空。`core_version`、`core_commit`、`client_type`、`client_version`、`luci_version` 同样只在非空时写入；旧客户端不带这些字段时，已保存的值保持不变。
+- **版本拆分**：`agent_version` 与 `core_version` 都是上游 Ladder 核心版本（`git describe --tags --always`：精确标签为 `vX.Y.Z`，超前提交为 `vX.Y.Z-N-gSHA`）。过期判断只比较核心版本和主仓 Release 标签。`client_type` 为 `linux`、`android` 或 `openwrt`；缺省不猜测平台。`client_version` 是外壳版本（Android `versionName`、OpenWrt `PKG_VERSION-rN`）。`luci_version` 仅 OpenWrt 在装了 LuCI 时上报，空值省略。`android` 与 `openwrt` 不接受 Linux 发布包远程升级。旧 Panel 忽略多出来的 JSON 键；新 Panel 在 `core_version` 为空时用 `agent_version` 充当核心版本。WebSocket 上报使用同一组 JSON 键。gRPC `PingResponse` 用新字段号携带同名信息：`core_version = 5`、`core_commit = 6`、`client_type = 7`、`client_version = 8`、`luci_version = 9`。
 - **状态刷新**：接受上报即置节点 `status=online`，刷新 `last_seen_unix` 与 `uplink_last_seen_unix`。
 - **数值校验**：CPU 百分比限定 0–100，连接数 / 流量 / 内存等不得为负，非法值拒绝，防脏数据。
 

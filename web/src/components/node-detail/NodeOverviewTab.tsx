@@ -9,6 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Eye, EyeOff, X, Copy, Check, QrCode } from 'lucide-react'
 import type { NetworkInterface, NodeInstallInfo } from '@/api/client'
 import { NodePairingQRModal } from '@/components/NodePairingQRModal'
+import { linuxReleaseUpgradeAllowed } from '@/lib/nodeDisplay'
 
 /** Radix Select rejects empty-string item values; use a sentinel for "系统默认". */
 const EGRESS_DEFAULT_VALUE = '__default__'
@@ -92,7 +93,10 @@ export function NodeOverviewTab({
     reported && (reported.agent_version || reported.last_seen_unix || reported.uplink_last_seen_unix || reported.pki_cert_serial),
   )
   const showInstall = Boolean(installInfo?.install_command) && !installed
-  const showUpgrade = installed && Boolean(installInfo?.upgrade_command && installInfo.outdated)
+  const showUpgrade =
+    installed &&
+    linuxReleaseUpgradeAllowed(reported?.client_type) &&
+    Boolean(installInfo?.upgrade_command && installInfo.outdated)
 
   function egressOptions() {
     const opts = [{ value: EGRESS_DEFAULT_VALUE, label: '系统默认' }]

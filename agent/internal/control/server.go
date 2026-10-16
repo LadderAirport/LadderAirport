@@ -8,6 +8,7 @@ import (
 
 	"github.com/ladderairport/agent/internal/frpsruntime"
 	"github.com/ladderairport/agent/internal/protocolcert"
+	"github.com/ladderairport/agent/internal/version"
 	agentv1 "github.com/ladderairport/proto/gen/go/agent/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -90,11 +91,17 @@ func (s *Server) Ping(context.Context, *agentv1.PingRequest) (*agentv1.PingRespo
 		capabilities = append(capabilities, "frps-v1", "frps-mappings-v1")
 		frpsVersion = frpsruntime.Version()
 	}
+	id := version.Report(s.agentVersion)
 	return &agentv1.PingResponse{
-		AgentVersion:   s.agentVersion,
+		AgentVersion:   id.AgentVersion,
 		SingboxVersion: s.singboxVersion,
 		Capabilities:   capabilities,
 		FrpsVersion:    frpsVersion,
+		CoreVersion:    id.CoreVersion,
+		CoreCommit:     id.CoreCommit,
+		ClientType:     id.ClientType,
+		ClientVersion:  id.ClientVersion,
+		LuciVersion:    id.LuciVersion,
 	}, nil
 }
 
@@ -419,6 +426,13 @@ func (s *Server) ListInterfaces(context.Context, *agentv1.ListInterfacesRequest)
 func (s *Server) UpgradeAgent(ctx context.Context, req *agentv1.UpgradeAgentRequest) (*agentv1.UpgradeAgentResponse, error) {
 	if req == nil {
 		req = &agentv1.UpgradeAgentRequest{}
+	}
+	if !version.AllowsLinuxReleaseUpgrade(version.ClientType) {
+		return &agentv1.UpgradeAgentResponse{
+			Ok:              false,
+			Message:         "客户端类型 " + strings.TrimSpace(version.ClientType) + " 不能使用 Linux 发布包远程升级",
+			PreviousVersion: s.agentVersion,
+		}, nil
 	}
 	res, err := StageAgentUpgrade(ctx, UpgradeRequest{
 		Version:     req.GetVersion(),

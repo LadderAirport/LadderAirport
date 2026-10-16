@@ -53,7 +53,10 @@ import {
   type UpdateNodeInput,
 } from '../api/client'
 import {
+  clientVersionLine,
+  coreVersion,
   isAgentOutdated,
+  linuxReleaseUpgradeAllowed,
   nodeEndpointLabel,
   runtimeLabel,
   runtimeTheme,
@@ -746,6 +749,10 @@ export default function NodeDetailDrawer({ nodeId, onClose, onChanged }: Props) 
 
   const onRemoteUpgrade = async () => {
     if (busy) return
+    if (node && !linuxReleaseUpgradeAllowed(node.client_type)) {
+      toast.error('该节点是 Android 或 OpenWrt 客户端，不能使用 Linux 发布包远程升级')
+      return
+    }
     setBusyAction('upgrade')
     try {
       const res = await upgradeNode(id)
@@ -902,7 +909,7 @@ export default function NodeDetailDrawer({ nodeId, onClose, onChanged }: Props) 
                       )
                     ) : null}
                     {installInfo ? (
-                      isAgentOutdated(node.agent_version, installInfo.recommended_agent_version) ? (
+                      isAgentOutdated(coreVersion(node), installInfo.recommended_agent_version) ? (
                         <StatusBadge
                           value="outdated"
                           label={
@@ -911,7 +918,7 @@ export default function NodeDetailDrawer({ nodeId, onClose, onChanged }: Props) 
                               : undefined
                           }
                         />
-                      ) : node.agent_version ? (
+                      ) : coreVersion(node) ? (
                         <StatusBadge value="success" label="已最新" />
                       ) : null
                     ) : null}
@@ -938,7 +945,22 @@ export default function NodeDetailDrawer({ nodeId, onClose, onChanged }: Props) 
                 <div className="space-y-1">
                   <span className="text-muted-foreground block">版本</span>
                   <span className="text-foreground">
-                    Agent <code className="text-foreground font-mono">{node.agent_version || '—'}</code>
+                    核心 <code className="text-foreground font-mono">{coreVersion(node) || '—'}</code>
+                    {node.core_commit ? (
+                      <> (<code className="text-foreground font-mono">{node.core_commit}</code>)</>
+                    ) : null}
+                    {clientVersionLine(node) ? (
+                      <>
+                        {' '}
+                        · {clientVersionLine(node)}
+                      </>
+                    ) : null}
+                    {node.luci_version ? (
+                      <>
+                        {' '}
+                        · LuCI <code className="text-foreground font-mono">{node.luci_version}</code>
+                      </>
+                    ) : null}
                     {node.singbox_version ? (
                       <> · sing-box <code className="text-foreground font-mono">{node.singbox_version}</code></>
                     ) : null}

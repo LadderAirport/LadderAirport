@@ -2,9 +2,12 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import {
+  clientVersionLine,
   compareSemVer,
+  coreVersion,
   formatBytes,
   isAgentOutdated,
+  linuxReleaseUpgradeAllowed,
   parseSemVer,
   runtimeLabel,
   statusLabel,
@@ -30,6 +33,21 @@ test('semver parser finds version tokens and compares prereleases', () => {
   })
   assert.equal(compareSemVer(parseSemVer('1.2.3-rc.1'), parseSemVer('1.2.3')), -1)
   assert.equal(compareSemVer(parseSemVer('1.10.0'), parseSemVer('1.9.9')), 1)
+})
+
+test('core version is separate from the wrapper and does not guess a platform', () => {
+  assert.equal(coreVersion({ core_version: 'v0.15.12-3-g2ebfece', agent_version: 'v0.15.9' }), 'v0.15.12-3-g2ebfece')
+  assert.equal(coreVersion({ agent_version: 'v0.15.9' }), 'v0.15.9')
+  assert.equal(clientVersionLine({ client_type: 'android', client_version: '1.1.0' }), 'Android 1.1.0')
+  assert.equal(clientVersionLine({ client_type: 'openwrt', client_version: '0.15.12-r2' }), 'OpenWrt 0.15.12-r2')
+  assert.equal(clientVersionLine({ client_type: 'linux', client_version: 'v0.15.12' }), '')
+  assert.equal(clientVersionLine({ agent_version: '1.1.0' }), '')
+  assert.equal(linuxReleaseUpgradeAllowed(''), true)
+  assert.equal(linuxReleaseUpgradeAllowed('linux'), true)
+  assert.equal(linuxReleaseUpgradeAllowed('android'), false)
+  assert.equal(linuxReleaseUpgradeAllowed('openwrt'), false)
+  assert.equal(isAgentOutdated('1.1.0', 'v0.15.12'), false)
+  assert.equal(isAgentOutdated('v0.15.9', 'v0.15.12'), true)
 })
 
 test('agent upgrade detection does not downgrade newer versions', () => {

@@ -130,6 +130,11 @@ func (c *Client) dispatchCommand(ctx context.Context, cmd pulledCommand) (string
 			"ok":              true,
 			"agent_version":   resp.GetAgentVersion(),
 			"singbox_version": resp.GetSingboxVersion(),
+			"core_version":    resp.GetCoreVersion(),
+			"core_commit":     resp.GetCoreCommit(),
+			"client_type":     resp.GetClientType(),
+			"client_version":  resp.GetClientVersion(),
+			"luci_version":    resp.GetLuciVersion(),
 			"capabilities":    resp.GetCapabilities(),
 		})
 	case cmdInterfaces:

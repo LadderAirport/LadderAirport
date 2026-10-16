@@ -50,7 +50,8 @@ type nodeInstallResponse struct {
 	PanelBaseURL     string     `json:"panel_base_url,omitempty"`
 	// RecommendedAgentVersion is the latest known release tag (may be empty).
 	RecommendedAgentVersion string `json:"recommended_agent_version,omitempty"`
-	// Outdated is true when the node's reported agent_version looks behind recommended.
+	// Outdated is true when the node's core version looks behind recommended.
+	// Wrapper versions are not compared.
 	Outdated bool `json:"outdated,omitempty"`
 }
 
@@ -217,7 +218,7 @@ func (s *Server) handleBootstrapNode(w http.ResponseWriter, r *http.Request) {
 		Steps:                   installSteps(addr, port, created.ControlMode == store.ControlModeUplink),
 		PanelBaseURL:            panelBase,
 		RecommendedAgentVersion: rec,
-		Outdated:                isAgentVersionOutdated(created.AgentVersion, rec),
+		Outdated:                isAgentVersionOutdated(nodeCoreVersion(*created), rec),
 	})
 }
 
@@ -281,16 +282,20 @@ func (s *Server) handleNodeInstallCommand(w http.ResponseWriter, r *http.Request
 	if upgradeVer == "" || upgradeVer == "latest" {
 		upgradeVer = rec
 	}
+	upgradeCmd := ""
+	if linuxReleaseUpgradeAllowed(n.ClientType) {
+		upgradeCmd = buildUpgradeCommand(installCommandOpts{ScriptURL: scriptURL, AgentVersion: upgradeVer})
+	}
 	writeJSON(w, http.StatusOK, nodeInstallResponse{
 		Node:                    *n,
 		Token:                   n.Token,
 		InstallCommand:          cmd,
-		UpgradeCommand:          buildUpgradeCommand(installCommandOpts{ScriptURL: scriptURL, AgentVersion: upgradeVer}),
+		UpgradeCommand:          upgradeCmd,
 		UninstallCommand:        buildUninstallCommand(installCommandOpts{ScriptURL: scriptURL}, false),
 		Steps:                   installSteps(n.Address, n.GRPCPort, n.ControlMode == store.ControlModeUplink),
 		PanelBaseURL:            panelBase,
 		RecommendedAgentVersion: rec,
-		Outdated:                isAgentVersionOutdated(n.AgentVersion, rec),
+		Outdated:                isAgentVersionOutdated(nodeCoreVersion(*n), rec),
 	})
 }
 
@@ -707,13 +712,7 @@ func (s *Server) handleProbeNode(w http.ResponseWriter, r *http.Request) {
 		// parity with a push node's gRPC control plane. Fall back to the last
 		// report only when no socket is connected.
 		if _, connected := s.uplinkClient(node.ID); !connected {
-			writeJSON(w, http.StatusOK, map[string]any{
-				"ok":            node.Status == "online",
-				"status":        node.Status,
-				"agent_version": node.AgentVersion,
-				"capabilities":  node.Capabilities,
-				"message":       "uplink 节点未建立实时通道，使用最近一次上报",
-			})
+			writeJSON(w, http.StatusOK, cachedProbeResponse(node, "uplink 节点未建立实时通道，使用最近一次上报"))
 			return
 		}
 	}
@@ -730,13 +729,7 @@ func (s *Server) handleProbeNode(w http.ResponseWriter, r *http.Request) {
 	}
 	if !live {
 		// Uplink node lost its socket between the check above and now.
-		writeJSON(w, http.StatusOK, map[string]any{
-			"ok":            node.Status == "online",
-			"status":        node.Status,
-			"agent_version": node.AgentVersion,
-			"capabilities":  node.Capabilities,
-			"message":       "uplink 节点未建立实时通道，使用最近一次上报",
-		})
+		writeJSON(w, http.StatusOK, cachedProbeResponse(node, "uplink 节点未建立实时通道，使用最近一次上报"))
 		return
 	}
 	defer func() { _ = client.Close() }()
@@ -751,8 +744,7 @@ func (s *Server) handleProbeNode(w http.ResponseWriter, r *http.Request) {
 	}
 	node.Status = "online"
 	node.LastSeenUnix = time.Now().Unix()
-	node.AgentVersion = resp.GetAgentVersion()
-	node.SingboxVersion = resp.GetSingboxVersion()
+	applyPingIdentity(node, resp)
 	node.Capabilities = append([]string{}, resp.GetCapabilities()...)
 	node.LastError = ""
 	// Best-effort status/metrics on single probe.
@@ -779,6 +771,11 @@ func (s *Server) handleProbeNode(w http.ResponseWriter, r *http.Request) {
 		"node":            node,
 		"agent_version":   resp.GetAgentVersion(),
 		"singbox_version": resp.GetSingboxVersion(),
+		"core_version":    resp.GetCoreVersion(),
+		"core_commit":     resp.GetCoreCommit(),
+		"client_type":     resp.GetClientType(),
+		"client_version":  resp.GetClientVersion(),
+		"luci_version":    resp.GetLuciVersion(),
 		"capabilities":    resp.GetCapabilities(),
 	})
 }
@@ -1027,6 +1024,10 @@ func (s *Server) handleNodeUpgrade(w http.ResponseWriter, r *http.Request) {
 			writeDecodeError(w, err)
 			return
 		}
+	}
+	if !linuxReleaseUpgradeAllowed(node.ClientType) {
+		writeError(w, http.StatusConflict, "该节点是 "+strings.TrimSpace(node.ClientType)+" 客户端，不能使用 Linux 发布包远程升级")
+		return
 	}
 	version := strings.TrimSpace(body.Version)
 	if version == "" {

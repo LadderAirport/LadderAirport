@@ -55,9 +55,22 @@ type Node struct {
 	LastSeenUnix int64  `json:"last_seen_unix"`
 	ConfigHash   string `json:"config_hash"`
 	// Live monitoring cache (updated by fleet refresh / probe).
-	RuntimeState   string   `json:"runtime_state"` // running | stopped | error | ""
-	AgentVersion   string   `json:"agent_version"`
-	SingboxVersion string   `json:"singbox_version"`
+	RuntimeState   string `json:"runtime_state"` // running | stopped | error | ""
+	AgentVersion   string `json:"agent_version"`
+	SingboxVersion string `json:"singbox_version"`
+	// CoreVersion is the upstream ladder-agent version. Empty on old clients;
+	// readers fall back to AgentVersion. It is the only version compared with
+	// the recommended GitHub release.
+	CoreVersion string `json:"core_version"`
+	// CoreCommit is the short SHA of the Ladder core build. Empty when unknown.
+	CoreCommit string `json:"core_commit"`
+	// ClientType is linux, android, or openwrt. Empty means an old client that
+	// did not report a wrapper; do not guess a platform from the version string.
+	ClientType string `json:"client_type"`
+	// ClientVersion is the outer wrapper (APK versionName, OpenWrt package).
+	ClientVersion string `json:"client_version"`
+	// LuciVersion is the OpenWrt LuCI package version when the node reported one.
+	LuciVersion    string   `json:"luci_version"`
 	Capabilities   []string `json:"capabilities"`
 	Connections    int64    `json:"connections"`
 	UplinkBytes    int64    `json:"uplink_bytes"`
@@ -134,6 +147,11 @@ type NodeReport struct {
 	LastError       string
 	AgentVersion    string
 	SingboxVersion  string
+	CoreVersion     string
+	CoreCommit      string
+	ClientType      string
+	ClientVersion   string
+	LuciVersion     string
 	Capabilities    []string
 	HasCapabilities bool
 	HasMetrics      bool

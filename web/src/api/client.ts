@@ -195,6 +195,13 @@ export interface Node {
   runtime_state?: string
   agent_version?: string
   singbox_version?: string
+  /** Upstream ladder-agent version. Empty on old clients; fall back to agent_version. */
+  core_version?: string
+  core_commit?: string
+  /** linux | android | openwrt. Empty means the client did not report a wrapper. */
+  client_type?: string
+  client_version?: string
+  luci_version?: string
   capabilities?: string[]
   connections?: number
   uplink_bytes?: number

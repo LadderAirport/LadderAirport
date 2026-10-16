@@ -154,6 +154,12 @@ func TestPingCapabilityAndProbeOutbound(t *testing.T) {
 			t.Fatalf("capabilities = %v，缺少 %q", ping.Capabilities, capability)
 		}
 	}
+	if ping.GetAgentVersion() != "0.1.0-test" || ping.GetCoreVersion() != "0.1.0-test" {
+		t.Fatalf("core identity = %q / %q", ping.GetAgentVersion(), ping.GetCoreVersion())
+	}
+	if ping.GetClientType() != "linux" || ping.GetClientVersion() != "0.1.0-test" {
+		t.Fatalf("client identity = %q / %q", ping.GetClientType(), ping.GetClientVersion())
+	}
 	probe, err := client.ProbeOutbound(ctx, &agentv1.ProbeOutboundRequest{
 		OutboundTag: "chain-next",
 		Url:         "https://probe.example/204",

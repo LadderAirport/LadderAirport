@@ -144,8 +144,7 @@ func (s *Server) refreshOneNode(parent context.Context, n store.Node) store.Node
 	}
 	n.Status = "online"
 	n.LastSeenUnix = time.Now().Unix()
-	n.AgentVersion = ping.GetAgentVersion()
-	n.SingboxVersion = ping.GetSingboxVersion()
+	applyPingIdentity(&n, ping)
 	n.Capabilities = append([]string{}, ping.GetCapabilities()...)
 	n.LastError = ""
 

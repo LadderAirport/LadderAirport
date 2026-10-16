@@ -3,7 +3,8 @@
 # Default agent tags: QUIC (TUIC/Hy2) + uTLS (Reality/AnyTLS client fingerprints).
 AGENT_TAGS ?= with_quic,with_utls
 
-# Product version injected into panel/agent binaries (override for releases).
+# Core version injected into panel/agent binaries (override for releases).
+# git describe --tags --always yields vX.Y.Z on a tag and vX.Y.Z-N-gSHA when ahead.
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo 0.1.0-dev)
 GIT_COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 BUILD_TIME ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -16,6 +17,7 @@ VERSION_LDFLAGS = \
 	-X 'github.com/ladderairport/agent/internal/version.Version=$(VERSION)' \
 	-X 'github.com/ladderairport/agent/internal/version.Commit=$(GIT_COMMIT)' \
 	-X 'github.com/ladderairport/agent/internal/version.BuiltAt=$(BUILD_TIME)' \
+	-X 'github.com/ladderairport/agent/internal/version.ClientType=linux' \
 	-X 'github.com/ladderairport/panel/internal/version.Version=$(VERSION)' \
 	-X 'github.com/ladderairport/panel/internal/version.Commit=$(GIT_COMMIT)' \
 	-X 'github.com/ladderairport/panel/internal/version.BuiltAt=$(BUILD_TIME)'
