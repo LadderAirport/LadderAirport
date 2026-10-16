@@ -19,6 +19,11 @@ type agentReportRequest struct {
 	LastError       string   `json:"last_error"`
 	AgentVersion    string   `json:"agent_version"`
 	SingboxVersion  string   `json:"singbox_version"`
+	CoreVersion     string   `json:"core_version"`
+	CoreCommit      string   `json:"core_commit"`
+	ClientType      string   `json:"client_type"`
+	ClientVersion   string   `json:"client_version"`
+	LuciVersion     string   `json:"luci_version"`
 	Capabilities    []string `json:"capabilities"`
 	Connections     *int64   `json:"connections"`
 	UplinkBytes     *int64   `json:"uplink_bytes"`
@@ -108,6 +113,11 @@ func reportFromRequest(req agentReportRequest) store.NodeReport {
 		LastError:       req.LastError,
 		AgentVersion:    strings.TrimSpace(req.AgentVersion),
 		SingboxVersion:  strings.TrimSpace(req.SingboxVersion),
+		CoreVersion:     strings.TrimSpace(req.CoreVersion),
+		CoreCommit:      strings.TrimSpace(req.CoreCommit),
+		ClientType:      strings.TrimSpace(req.ClientType),
+		ClientVersion:   strings.TrimSpace(req.ClientVersion),
+		LuciVersion:     strings.TrimSpace(req.LuciVersion),
 	}
 	if req.Capabilities != nil {
 		report.HasCapabilities = true

@@ -14,8 +14,10 @@ import {
 import type { Node, Metrics, Task, NodeInstallInfo } from '@/api/client'
 import {
   formatBytes,
+  coreVersion,
   isAgentOutdated,
   isOnlineStatus,
+  linuxReleaseUpgradeAllowed,
   taskKindLabel,
   taskStatusLabel,
 } from '@/lib/nodeDisplay'
@@ -73,8 +75,9 @@ export function NodeOpsTab({
   }, [logs, logsFollowing])
 
   const isOutdated = installInfo
-    ? isAgentOutdated(node.agent_version, installInfo.recommended_agent_version)
+    ? isAgentOutdated(coreVersion(node), installInfo.recommended_agent_version)
     : false
+  const canRemoteUpgrade = linuxReleaseUpgradeAllowed(node.client_type)
 
   return (
     <div className="space-y-6">
@@ -132,12 +135,14 @@ export function NodeOpsTab({
           <Button
             variant="outline"
             loading={busyAction === 'upgrade'}
-            disabled={busy}
+            disabled={busy || !canRemoteUpgrade}
             onClick={onRemoteUpgrade}
             title={
-              isOutdated
-                ? '远程升级 Agent 到最新推荐版本'
-                : '当前已是最新版本，再次点击可重推送升级指令'
+              !canRemoteUpgrade
+                ? '该客户端不能使用 Linux 发布包远程升级'
+                : isOutdated
+                  ? '远程升级核心到最新推荐版本'
+                  : '当前核心已是最新版本，再次点击可重推送升级指令'
             }
             className={`w-full border-border gap-1.5 ${
               isOutdated

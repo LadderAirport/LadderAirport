@@ -116,6 +116,7 @@ jobs:
           PANEL_LDFLAGS+=" -X github.com/ladderairport/agent/internal/version.Version=${VERSION}"
           PANEL_LDFLAGS+=" -X github.com/ladderairport/agent/internal/version.Commit=${GIT_COMMIT}"
           PANEL_LDFLAGS+=" -X github.com/ladderairport/agent/internal/version.BuiltAt=${BUILD_TIME}"
+          PANEL_LDFLAGS+=" -X github.com/ladderairport/agent/internal/version.ClientType=linux"
           cd panel
           go build -trimpath -ldflags="${PANEL_LDFLAGS}" -o ../dist/panel-${{ matrix.goos }}-${{ matrix.suffix }} ./cmd/panel
 
@@ -133,6 +134,7 @@ jobs:
           AGENT_LDFLAGS+=" -X github.com/ladderairport/agent/internal/version.Version=${VERSION}"
           AGENT_LDFLAGS+=" -X github.com/ladderairport/agent/internal/version.Commit=${GIT_COMMIT}"
           AGENT_LDFLAGS+=" -X github.com/ladderairport/agent/internal/version.BuiltAt=${BUILD_TIME}"
+          AGENT_LDFLAGS+=" -X github.com/ladderairport/agent/internal/version.ClientType=linux"
           AGENT_LDFLAGS+=" -X github.com/ladderairport/panel/internal/version.Version=${VERSION}"
           AGENT_LDFLAGS+=" -X github.com/ladderairport/panel/internal/version.Commit=${GIT_COMMIT}"
           AGENT_LDFLAGS+=" -X github.com/ladderairport/panel/internal/version.BuiltAt=${BUILD_TIME}"

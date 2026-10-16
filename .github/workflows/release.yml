@@ -83,6 +83,7 @@ jobs:
           VERSION_LDFLAGS="-X github.com/ladderairport/agent/internal/version.Version=${VERSION}"
           VERSION_LDFLAGS+=" -X github.com/ladderairport/agent/internal/version.Commit=${GIT_COMMIT}"
           VERSION_LDFLAGS+=" -X github.com/ladderairport/agent/internal/version.BuiltAt=${BUILD_TIME}"
+          VERSION_LDFLAGS+=" -X github.com/ladderairport/agent/internal/version.ClientType=linux"
           VERSION_LDFLAGS+=" -X github.com/ladderairport/panel/internal/version.Version=${VERSION}"
           VERSION_LDFLAGS+=" -X github.com/ladderairport/panel/internal/version.Commit=${GIT_COMMIT}"
           VERSION_LDFLAGS+=" -X github.com/ladderairport/panel/internal/version.BuiltAt=${BUILD_TIME}"

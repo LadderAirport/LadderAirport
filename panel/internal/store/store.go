@@ -530,6 +530,11 @@ func (s *Store) migrate() error {
 		`ALTER TABLE nodes ADD COLUMN runtime_state TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE nodes ADD COLUMN agent_version TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE nodes ADD COLUMN singbox_version TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE nodes ADD COLUMN core_version TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE nodes ADD COLUMN core_commit TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE nodes ADD COLUMN client_type TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE nodes ADD COLUMN client_version TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE nodes ADD COLUMN luci_version TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE nodes ADD COLUMN connections INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE nodes ADD COLUMN uplink_bytes INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE nodes ADD COLUMN downlink_bytes INTEGER NOT NULL DEFAULT 0`,
@@ -861,6 +866,7 @@ func (s *Store) UpdateNode(n *Node) error {
 			pki_cert_serial = ?, pki_not_after_unix = ?,
 			config_hash = ?,
 			runtime_state = ?, agent_version = ?, singbox_version = ?,
+			core_version = ?, core_commit = ?, client_type = ?, client_version = ?, luci_version = ?,
 			connections = ?, uplink_bytes = ?, downlink_bytes = ?, cpu_percent = ?, memory_rss_bytes = ?,
 			metrics_at_unix = ?, last_error = ?, egress_interface = ?, public_address = ?,
 			port_mappings_json = ?, capabilities_json = ?, ddns_enabled = ?,
@@ -872,6 +878,7 @@ func (s *Store) UpdateNode(n *Node) error {
 		n.PKICertSerial, n.PKINotAfter,
 		n.ConfigHash,
 		n.RuntimeState, n.AgentVersion, n.SingboxVersion,
+		n.CoreVersion, n.CoreCommit, n.ClientType, n.ClientVersion, n.LuciVersion,
 		n.Connections, n.UplinkBytes, n.DownlinkBytes, n.CPUPercent, n.MemoryRSSBytes,
 		n.MetricsAtUnix, n.LastError, n.EgressInterface, n.PublicAddress,
 		mappingsJSON, capabilitiesJSON, boolToInt(n.DDNSEnabled),
@@ -1024,6 +1031,26 @@ func (s *Store) ApplyNodeReport(nodeID string, report NodeReport) (bool, error) 
 	if report.SingboxVersion != "" {
 		updateSingbox = 1
 	}
+	updateCore := 0
+	if report.CoreVersion != "" {
+		updateCore = 1
+	}
+	updateCoreCommit := 0
+	if report.CoreCommit != "" {
+		updateCoreCommit = 1
+	}
+	updateClientType := 0
+	if report.ClientType != "" {
+		updateClientType = 1
+	}
+	updateClientVersion := 0
+	if report.ClientVersion != "" {
+		updateClientVersion = 1
+	}
+	updateLuci := 0
+	if report.LuciVersion != "" {
+		updateLuci = 1
+	}
 
 	res, err := s.db.Exec(`
 		UPDATE nodes SET
@@ -1041,6 +1068,11 @@ func (s *Store) ApplyNodeReport(nodeID string, report NodeReport) (bool, error) 
 			capabilities_json = CASE WHEN ? != 0 THEN ? ELSE capabilities_json END,
 			agent_version = CASE WHEN ? != 0 THEN ? ELSE agent_version END,
 			singbox_version = CASE WHEN ? != 0 THEN ? ELSE singbox_version END,
+			core_version = CASE WHEN ? != 0 THEN ? ELSE core_version END,
+			core_commit = CASE WHEN ? != 0 THEN ? ELSE core_commit END,
+			client_type = CASE WHEN ? != 0 THEN ? ELSE client_type END,
+			client_version = CASE WHEN ? != 0 THEN ? ELSE client_version END,
+			luci_version = CASE WHEN ? != 0 THEN ? ELSE luci_version END,
 			uplink_last_seen_unix = ?,
 			updated_at_unix = ?
 		WHERE id = ? AND uplink_last_seen_unix <= ?`,
@@ -1058,6 +1090,11 @@ func (s *Store) ApplyNodeReport(nodeID string, report NodeReport) (bool, error) 
 		updateCaps, capsJSON,
 		updateAgent, report.AgentVersion,
 		updateSingbox, report.SingboxVersion,
+		updateCore, report.CoreVersion,
+		updateCoreCommit, report.CoreCommit,
+		updateClientType, report.ClientType,
+		updateClientVersion, report.ClientVersion,
+		updateLuci, report.LuciVersion,
 		collected, now,
 		nodeID, collected,
 	)
@@ -1190,6 +1227,7 @@ func scanNode(row interface {
 		&n.Connections, &n.UplinkBytes, &n.DownlinkBytes, &n.CPUPercent, &n.MemoryRSSBytes,
 		&n.MetricsAtUnix, &n.LastError, &n.EgressInterface, &n.PublicAddress, &mappingsJSON, &capabilitiesJSON,
 		&ddnsEnabled, &n.ControlMode, &n.DesiredRuntime, &n.UplinkLastSeenUnix, &n.CreatedAtUnix, &n.UpdatedAtUnix,
+		&n.CoreVersion, &n.CoreCommit, &n.ClientType, &n.ClientVersion, &n.LuciVersion,
 	)
 	if err != nil {
 		return nil, err
@@ -1223,7 +1261,8 @@ const nodeSelectCols = `id, name, address, grpc_port, token, labels_json, pki_ca
 	runtime_state, agent_version, singbox_version,
 	connections, uplink_bytes, downlink_bytes, cpu_percent, memory_rss_bytes,
 	metrics_at_unix, last_error, egress_interface, public_address, port_mappings_json, capabilities_json,
-	ddns_enabled, control_mode, desired_runtime, uplink_last_seen_unix, created_at_unix, updated_at_unix`
+	ddns_enabled, control_mode, desired_runtime, uplink_last_seen_unix, created_at_unix, updated_at_unix,
+	core_version, core_commit, client_type, client_version, luci_version`
 
 func (s *Store) GetNode(id string) (*Node, error) {
 	row := s.db.QueryRow(`SELECT `+nodeSelectCols+` FROM nodes WHERE id = ?`, id)

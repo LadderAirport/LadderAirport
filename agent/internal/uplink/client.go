@@ -91,6 +91,11 @@ type reportBody struct {
 	LastError       string   `json:"last_error"`
 	AgentVersion    string   `json:"agent_version"`
 	SingboxVersion  string   `json:"singbox_version"`
+	CoreVersion     string   `json:"core_version,omitempty"`
+	CoreCommit      string   `json:"core_commit,omitempty"`
+	ClientType      string   `json:"client_type,omitempty"`
+	ClientVersion   string   `json:"client_version,omitempty"`
+	LuciVersion     string   `json:"luci_version,omitempty"`
 	Capabilities    []string `json:"capabilities"`
 	Connections     int64    `json:"connections"`
 	UplinkBytes     int64    `json:"uplink_bytes"`
@@ -198,6 +203,11 @@ func (c *Client) report(ctx context.Context) {
 	if ping != nil {
 		body.AgentVersion = ping.GetAgentVersion()
 		body.SingboxVersion = ping.GetSingboxVersion()
+		body.CoreVersion = ping.GetCoreVersion()
+		body.CoreCommit = ping.GetCoreCommit()
+		body.ClientType = ping.GetClientType()
+		body.ClientVersion = ping.GetClientVersion()
+		body.LuciVersion = ping.GetLuciVersion()
 		body.Capabilities = ping.GetCapabilities()
 	}
 	if metrics != nil {

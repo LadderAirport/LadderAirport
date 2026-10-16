@@ -228,3 +228,29 @@ export function isAgentOutdated(
   if (rec.valid && !cur.valid) return true
   return normalizeVersion(curRaw) !== normalizeVersion(recRaw)
 }
+
+/** Core version used for staleness. Old clients only send agent_version. */
+export function coreVersion(node?: { core_version?: string | null; agent_version?: string | null } | null): string {
+  return String(node?.core_version || node?.agent_version || '').trim()
+}
+
+/**
+ * Second fleet line for a wrapper. Linux and unknown old clients stay on one line.
+ * Does not infer a platform from the version string.
+ */
+export function clientVersionLine(node?: {
+  client_type?: string | null
+  client_version?: string | null
+} | null): string {
+  const kind = String(node?.client_type || '').trim().toLowerCase()
+  const version = String(node?.client_version || '').trim()
+  if (kind === 'android') return version ? `Android ${version}` : 'Android'
+  if (kind === 'openwrt') return version ? `OpenWrt ${version}` : 'OpenWrt'
+  return ''
+}
+
+/** Linux release binaries must not be pushed to Android or OpenWrt wrappers. */
+export function linuxReleaseUpgradeAllowed(clientType?: string | null): boolean {
+  const kind = String(clientType || '').trim().toLowerCase()
+  return kind !== 'android' && kind !== 'openwrt'
+}

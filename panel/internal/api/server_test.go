@@ -1081,3 +1081,47 @@ func TestUpdateNodeDDNSEnabled(t *testing.T) {
 		t.Fatalf("re-enable status = %d body = %#v", resp.StatusCode, body)
 	}
 }
+
+func TestNodeUpgradeRejectsWrapperClients(t *testing.T) {
+	ts, client, st := newTestServer(t, nil, nil)
+	resp := login(t, client, ts.URL, "admin")
+	resp.Body.Close()
+
+	for _, clientType := range []string{"android", "openwrt"} {
+		n := &store.Node{
+			Name:        clientType,
+			Token:       "tok-" + clientType,
+			ControlMode: store.ControlModeUplink,
+			ClientType:  clientType,
+		}
+		if err := st.CreateNode(n); err != nil {
+			t.Fatal(err)
+		}
+		// CreateNode does not persist identity columns; store them the way a report does.
+		if _, err := st.ApplyNodeReport(n.ID, store.NodeReport{
+			CollectedAtUnix: time.Now().Unix(),
+			Status:          "online",
+			AgentVersion:    "v0.15.12",
+			CoreVersion:     "v0.15.12",
+			ClientType:      clientType,
+			ClientVersion:   "wrapper",
+		}); err != nil {
+			t.Fatal(err)
+		}
+		resp, body := doJSON(t, client, http.MethodPost, ts.URL+"/api/v1/nodes/"+n.ID+"/upgrade", map[string]any{})
+		if resp.StatusCode != http.StatusConflict {
+			t.Fatalf("%s upgrade status = %d body = %#v", clientType, resp.StatusCode, body)
+		}
+	}
+
+	linuxNode := &store.Node{Name: "linux", Token: "tok-linux", ControlMode: store.ControlModeUplink}
+	if err := st.CreateNode(linuxNode); err != nil {
+		t.Fatal(err)
+	}
+	resp, body := doJSON(t, client, http.MethodPost, ts.URL+"/api/v1/nodes/"+linuxNode.ID+"/upgrade", map[string]any{
+		"version": "v0.15.12",
+	})
+	if resp.StatusCode != http.StatusAccepted || body["queued"] != true {
+		t.Fatalf("empty client_type upgrade status = %d body = %#v", resp.StatusCode, body)
+	}
+}

@@ -984,6 +984,46 @@ func TestApplyNodeReportWritesAndDropsStale(t *testing.T) {
 	}
 }
 
+func TestApplyNodeReportKeepsIdentityWhenOmitted(t *testing.T) {
+	s := openTestStore(t)
+	n := &Node{Name: "edge", Token: "tok", ControlMode: ControlModeUplink}
+	if err := s.CreateNode(n); err != nil {
+		t.Fatal(err)
+	}
+	applied, err := s.ApplyNodeReport(n.ID, NodeReport{
+		CollectedAtUnix: 1_700_000_300,
+		Status:          "online",
+		AgentVersion:    "v0.15.12",
+		CoreVersion:     "v0.15.12-3-g2ebfece",
+		CoreCommit:      "2ebfece",
+		ClientType:      "openwrt",
+		ClientVersion:   "0.15.12-r2",
+		LuciVersion:     "26.288.0734~760600c-1",
+	})
+	if err != nil || !applied {
+		t.Fatalf("applied=%v err=%v", applied, err)
+	}
+	if _, err := s.ApplyNodeReport(n.ID, NodeReport{
+		CollectedAtUnix: 1_700_000_301,
+		Status:          "online",
+		RuntimeState:    "running",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.GetNode(n.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.AgentVersion != "v0.15.12" || got.CoreVersion != "v0.15.12-3-g2ebfece" ||
+		got.CoreCommit != "2ebfece" || got.ClientType != "openwrt" ||
+		got.ClientVersion != "0.15.12-r2" || got.LuciVersion != "26.288.0734~760600c-1" {
+		t.Fatalf("empty report cleared identity: %+v", got)
+	}
+	if got.RuntimeState != "running" {
+		t.Fatalf("runtime = %q", got.RuntimeState)
+	}
+}
+
 func TestMarkUplinkUnreachableDoesNotClobberNewerReport(t *testing.T) {
 	s := openTestStore(t)
 	n := &Node{Name: "edge", Token: "tok", ControlMode: ControlModeUplink}

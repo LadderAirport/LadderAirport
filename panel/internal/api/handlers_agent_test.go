@@ -36,6 +36,10 @@ func TestAgentReportAndConfigSyncReuseHTTPBearer(t *testing.T) {
 		"runtime_state":     "running",
 		"config_hash":       "cfg-1",
 		"agent_version":     "v-test",
+		"core_version":      "v0.15.12-3-g2ebfece",
+		"core_commit":       "2ebfece",
+		"client_type":       "android",
+		"client_version":    "1.1.0",
 		"capabilities":      []string{"uplink-v1"},
 		"connections":       2,
 		"uplink_bytes":      10,
@@ -64,6 +68,10 @@ func TestAgentReportAndConfigSyncReuseHTTPBearer(t *testing.T) {
 	}
 	if got.UplinkLastSeenUnix == 0 || got.Connections != 2 {
 		t.Fatalf("metrics not applied: %+v", got)
+	}
+	if got.CoreVersion != "v0.15.12-3-g2ebfece" || got.CoreCommit != "2ebfece" ||
+		got.ClientType != "android" || got.ClientVersion != "1.1.0" || got.LuciVersion != "" {
+		t.Fatalf("identity not applied: %+v", got)
 	}
 
 	wrong, _ := http.NewRequest(http.MethodPost, server.URL+"/api/v1/agent/report", bytes.NewReader(reportBody))

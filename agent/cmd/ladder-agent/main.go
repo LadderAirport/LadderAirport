@@ -50,9 +50,16 @@ func main() {
 	flag.Parse()
 
 	if *showVersion {
-		fmt.Printf("ladder-agent %s", version.Version)
-		if version.Commit != "" && version.Commit != "unknown" {
-			fmt.Printf(" (%s)", version.Commit)
+		id := version.Report(version.Version)
+		fmt.Printf("ladder-agent %s", id.CoreVersion)
+		if id.CoreCommit != "" {
+			fmt.Printf(" (%s)", id.CoreCommit)
+		}
+		if id.ClientType != "linux" || id.ClientVersion != id.CoreVersion || id.LuciVersion != "" {
+			fmt.Printf(" client=%s/%s", id.ClientType, id.ClientVersion)
+			if id.LuciVersion != "" {
+				fmt.Printf(" luci=%s", id.LuciVersion)
+			}
 		}
 		fmt.Println()
 		return

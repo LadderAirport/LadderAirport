@@ -58,7 +58,10 @@ import { StatusBadge } from '@/components/ui/status-badge'
 import {
   formatBytes,
   formatTime,
+  clientVersionLine,
+  coreVersion,
   isAgentOutdated,
+  linuxReleaseUpgradeAllowed,
   isOnlineStatus,
   nodeEndpointLabel,
   runtimeLabel,
@@ -420,6 +423,11 @@ export default function Fleet() {
   }
 
   async function showUpgrade(id: string) {
+    const target = (allNodes ?? []).find((x) => x.id === id)
+    if (target && !linuxReleaseUpgradeAllowed(target.client_type)) {
+      toast.error('该节点是 Android 或 OpenWrt 客户端，不能使用 Linux 发布包远程升级')
+      return
+    }
     if (!beginNodeAction(id, 'upgrade')) return
     const request = ++upgradeBannerRequestRef.current
     installBannerRequestRef.current += 1
@@ -518,7 +526,7 @@ export default function Fleet() {
   const outdatedNodes = useMemo(() => {
     if (!recommended) return [] as Node[]
     return allNodes.filter(
-      (n) => n.status !== 'pending' && isAgentOutdated(n.agent_version, recommended),
+      (n) => n.status !== 'pending' && isAgentOutdated(coreVersion(n), recommended),
     )
   }, [allNodes, recommended])
 
@@ -543,7 +551,7 @@ export default function Fleet() {
                 <span className="text-muted-foreground">•</span>
                 <span>推荐 Agent <code className="font-mono text-muted-foreground">{recommended}</code></span>
                 {outdatedNodes.length > 0 ? (
-                  <StatusBadge value="outdated" label={`${outdatedNodes.length} 个节点可升级`} />
+                  <StatusBadge value="outdated" label={`${outdatedNodes.length} 个节点核心可升级`} />
                 ) : (
                   <StatusBadge value="success" label="版本均已对齐" />
                 )}
@@ -644,7 +652,7 @@ export default function Fleet() {
           </CardHeader>
           <CardContent className="p-5 pt-1 space-y-3">
             <p className="text-xs text-muted-foreground leading-normal">
-              当前 Agent 版本为 <code className="font-mono text-foreground">{upgradeBanner.node.agent_version || '—'}</code>。在目标服务器以 root 用户执行以下升级命令（会自动保留现有的 Token、TLS 和业务配置）：
+              当前核心版本为 <code className="font-mono text-foreground">{coreVersion(upgradeBanner.node) || '—'}</code>。在目标服务器以 root 用户执行以下升级命令（会自动保留现有的 Token、TLS 和业务配置）：
             </p>
             <pre className="p-3 bg-muted border border-border rounded-md overflow-x-auto text-[10px] font-mono text-foreground">
               {upgradeBanner.command}
@@ -838,14 +846,16 @@ export default function Fleet() {
                     <TableHead className="w-24">内存</TableHead>
                     <TableHead className="min-w-[140px]">标签</TableHead>
                     <TableHead className="w-28">最后活跃</TableHead>
-                    <TableHead className="w-24">Agent</TableHead>
+                    <TableHead className="min-w-[140px]">版本</TableHead>
                     <TableHead className="w-[180px] text-right">操作</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody className="divide-y divide-zinc-900 border-zinc-900">
                   {nodes.map((n) => {
                     const fresh = hasFreshMetrics(n)
-                    const outdated = n.status !== 'pending' && isAgentOutdated(n.agent_version, recommended)
+                    const outdated = n.status !== 'pending' && isAgentOutdated(coreVersion(n), recommended)
+                    const wrapper = clientVersionLine(n)
+                    const canRemoteUpgrade = linuxReleaseUpgradeAllowed(n.client_type)
                     const actionBusy = batchBusy || activeActions[n.id] !== undefined
                     return (
                       <TableRow key={n.id} className="hover:bg-muted/50 border-border">
@@ -928,10 +938,13 @@ export default function Fleet() {
                           {formatTime(n.last_seen_unix || n.metrics_at_unix)}
                         </TableCell>
                         <TableCell className="space-y-0.5">
-                          <code className="text-xs font-mono text-foreground block">{n.agent_version || '—'}</code>
+                          <code className="text-xs font-mono text-foreground block">{coreVersion(n) || '—'}</code>
+                          {wrapper ? (
+                            <span className="text-[10px] font-mono text-muted-foreground block">{wrapper}</span>
+                          ) : null}
                           {outdated ? (
                             <StatusBadge value="outdated" />
-                          ) : n.agent_version ? (
+                          ) : coreVersion(n) ? (
                             <StatusBadge value="success" label="已最新" />
                           ) : null}
                         </TableCell>
@@ -969,8 +982,14 @@ export default function Fleet() {
                                   : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-900'
                               }`}
                               loading={activeActions[n.id] === 'upgrade'}
-                              disabled={actionBusy}
-                              title={outdated ? '远程升级 Agent 到最新推荐版本' : `当前已是最新版本 (${n.agent_version || recommended})，点击可重新推送升级指令`}
+                              title={
+                                !canRemoteUpgrade
+                                  ? '该客户端不能使用 Linux 发布包远程升级'
+                                  : outdated
+                                    ? '远程升级核心到最新推荐版本'
+                                    : `当前核心已是最新版本 (${coreVersion(n) || recommended})，点击可重新推送升级指令`
+                              }
+                              disabled={actionBusy || !canRemoteUpgrade}
                               onClick={() => void showUpgrade(n.id)}
                             >
                               {outdated ? '升级' : '重升'}
@@ -1106,7 +1125,9 @@ function NodeCard({
   onDelete: () => void
 }) {
   const online = isOnlineStatus(n.status)
-  const outdated = n.status !== 'pending' && isAgentOutdated(n.agent_version, recommended)
+  const outdated = n.status !== 'pending' && isAgentOutdated(coreVersion(n), recommended)
+  const wrapper = clientVersionLine(n)
+  const canRemoteUpgrade = linuxReleaseUpgradeAllowed(n.client_type)
   const hasMetrics = hasFreshMetrics(n)
   
   const statusGlow = online
@@ -1199,9 +1220,12 @@ function NodeCard({
 
         {/* Bottom Agent Version information */}
         <div className="text-[10px] text-zinc-500 flex flex-wrap justify-between items-center gap-2 pt-1">
-          <div className="flex items-center gap-1">
-            <span>Agent {n.agent_version || '—'}</span>
-            {outdated && <StatusBadge value="outdated" />}
+          <div className="flex flex-col gap-0.5">
+            <span className="flex items-center gap-1">
+              <span>核心 {coreVersion(n) || '—'}</span>
+              {outdated && <StatusBadge value="outdated" />}
+            </span>
+            {wrapper ? <span className="font-mono">{wrapper}</span> : null}
           </div>
           <span>探测 {formatTime(n.last_seen_unix || n.metrics_at_unix)}</span>
         </div>
@@ -1277,9 +1301,15 @@ function NodeCard({
             size="sm"
             variant="outline"
             loading={activeAction === 'upgrade'}
-            disabled={actionBusy && activeAction !== 'upgrade'}
             onClick={onUpgrade}
-            title={outdated ? '远程升级 Agent 到最新推荐版本' : `当前已是最新版本 (${n.agent_version || recommended})，点击可重新推送升级指令`}
+            title={
+              !canRemoteUpgrade
+                ? '该客户端不能使用 Linux 发布包远程升级'
+                : outdated
+                  ? '远程升级核心到最新推荐版本'
+                  : `当前核心已是最新版本 (${coreVersion(n) || recommended})，点击可重新推送升级指令`
+            }
+            disabled={(actionBusy && activeAction !== 'upgrade') || !canRemoteUpgrade}
             className={`h-8 text-xs ${
               outdated ? 'text-amber-500 hover:text-amber-400 border-amber-500/30' : 'text-muted-foreground'
             }`}

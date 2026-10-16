@@ -45,6 +45,15 @@ message PingResponse {
   string singbox_version = 2;
   repeated string capabilities = 3;
   string frps_version = 4;
+  // Core identity is the upstream ladder-agent build. agent_version stays
+  // equal to core_version so older panels keep a single comparable version.
+  // Wrapper identity (Android APK, OpenWrt package, LuCI) is separate and
+  // must not be written into agent_version.
+  string core_version = 5;
+  string core_commit = 6;
+  string client_type = 7;
+  string client_version = 8;
+  string luci_version = 9;
 }
 
 message FRPServerPortRange {
