@@ -97,6 +97,80 @@ func TestConvertRouteRulesAfterChainRules(t *testing.T) {
 	}
 }
 
+func TestConvertNodeDNSBlock(t *testing.T) {
+	inbounds := []store.InboundConfig{testSSInbound("a1", 11001)}
+	chainOutbound := map[string]any{
+		"type": "shadowsocks", "tag": "chain-next",
+		"server": "next.example", "server_port": 443, "method": "aes-128-gcm", "password": "x",
+	}
+	raw, err := Convert(inbounds, ConvertOptions{
+		BindInterface: "eth0",
+		ChainRoutes:   []ChainRoute{{InboundID: "a1", Outbound: chainOutbound}},
+		RouteRules: []RouteRule{
+			{MatchType: "ip_cidr", MatchValue: "203.0.113.0/24", Outbound: "direct"},
+			{MatchType: "domain_suffix", MatchValue: "example.com", Outbound: "direct"},
+		},
+		DNS: map[string]any{"final": "doh-cf"},
+		DNSRuleSet: map[string]any{
+			"type": "remote", "tag": "geosite-cn", "format": "binary",
+		},
+		ChainDomainResolver: map[string]any{"server": "doh-cf", "strategy": "ipv4_only"},
+		Sniff:               true,
+		SniffOverride:       true,
+		SniffTimeout:        "300ms",
+		ResolveStrategy:     "prefer_ipv4",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg map[string]any
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if cfg["dns"].(map[string]any)["final"] != "doh-cf" {
+		t.Fatalf("dns = %v", cfg["dns"])
+	}
+	inbound := cfg["inbounds"].([]any)[0].(map[string]any)
+	if inbound["sniff"] != true || inbound["sniff_override_destination"] != true || inbound["sniff_timeout"] != "300ms" {
+		t.Fatalf("inbound sniff = %v", inbound)
+	}
+	direct := cfg["outbounds"].([]any)[0].(map[string]any)
+	if _, ok := direct["domain_resolver"]; ok {
+		t.Fatalf("direct must not set domain_resolver: %v", direct)
+	}
+	if direct["bind_interface"] != "eth0" {
+		t.Fatalf("direct bind = %v", direct["bind_interface"])
+	}
+	chain := cfg["outbounds"].([]any)[1].(map[string]any)
+	resolver := chain["domain_resolver"].(map[string]any)
+	if resolver["server"] != "doh-cf" || resolver["strategy"] != "ipv4_only" {
+		t.Fatalf("chain resolver = %v", resolver)
+	}
+	rules := decodeRouteRules(t, raw)
+	if rules[0]["action"] != "sniff" {
+		t.Fatalf("first rule = %v", rules[0])
+	}
+	if rules[1]["outbound"] != "chain-next" {
+		t.Fatalf("chain rule = %v", rules[1])
+	}
+	if _, ok := rules[2]["domain_suffix"]; !ok {
+		t.Fatalf("domain rule should precede resolve: %v", rules[2])
+	}
+	if rules[3]["action"] != "resolve" || rules[3]["strategy"] != "prefer_ipv4" {
+		t.Fatalf("resolve = %v", rules[3])
+	}
+	if _, ok := rules[3]["server"]; ok {
+		t.Fatal("resolve must omit server so dns.rules still apply")
+	}
+	if _, ok := rules[4]["ip_cidr"]; !ok {
+		t.Fatalf("ip rule = %v", rules[4])
+	}
+	route := cfg["route"].(map[string]any)
+	if route["rule_set"] == nil {
+		t.Fatal("missing geosite rule set")
+	}
+}
+
 func TestConvertRouteRulesNilKeepsLegacyShape(t *testing.T) {
 	raw, err := Convert([]store.InboundConfig{testSSInbound("a1", 11001)}, ConvertOptions{})
 	if err != nil {

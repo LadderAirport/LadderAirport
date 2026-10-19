@@ -14,6 +14,7 @@ import (
 	"github.com/ladderairport/panel/internal/store"
 	"github.com/ladderairport/panel/internal/subscription"
 	"github.com/ladderairport/pkg/hashutil"
+	"github.com/ladderairport/pkg/nodedns"
 )
 
 type Builder struct {
@@ -52,6 +53,12 @@ func (b *Builder) BuildWithChains(nodeID string, chains []store.ProxyChain) (Res
 	for _, in := range inbounds {
 		byID[in.ID] = true
 	}
+	bindInterface := strings.TrimSpace(node.EgressInterface)
+	if strings.EqualFold(strings.TrimSpace(node.ClientType), "android") {
+		// Android node builds cannot bind a chosen NIC. Omit the field here
+		// so a pushed config does not fail dial; the agent also strips it.
+		bindInterface = ""
+	}
 	routes := []converter.ChainRoute{}
 	for _, chain := range chains {
 		if !chain.Enabled {
@@ -85,8 +92,8 @@ func (b *Builder) BuildWithChains(nodeID string, chains []store.ProxyChain) (Res
 				return Result{}, fmt.Errorf("代理链 %q 第 %d 跳的出站配置失败：%w", chain.Name, i+1, err)
 			}
 			outbound["tag"] = ChainOutboundTag(chain.ID, i)
-			if iface := strings.TrimSpace(node.EgressInterface); iface != "" {
-				outbound["bind_interface"] = iface
+			if bindInterface != "" {
+				outbound["bind_interface"] = bindInterface
 			}
 			routes = append(routes, converter.ChainRoute{
 				InboundID: hop.InboundID,
@@ -102,12 +109,30 @@ func (b *Builder) BuildWithChains(nodeID string, chains []store.ProxyChain) (Res
 	if err != nil {
 		return Result{}, err
 	}
-	raw, err := converter.Convert(inbounds, converter.ConvertOptions{
-		BindInterface: node.EgressInterface,
+	convertOpts := converter.ConvertOptions{
+		BindInterface: bindInterface,
 		AllowEmpty:    true,
 		ChainRoutes:   routes,
 		RouteRules:    routeRules,
-	})
+	}
+	if nodedns.SupportsSchema(node.SingboxVersion) {
+		dnsCfg := node.DNS
+		if err := dnsCfg.Normalize(); err != nil {
+			return Result{}, fmt.Errorf("节点 DNS：%w", err)
+		}
+		emitted, err := dnsCfg.Emit(nodedns.EmitOptions{BindInterface: bindInterface})
+		if err != nil {
+			return Result{}, fmt.Errorf("节点 DNS：%w", err)
+		}
+		convertOpts.DNS = emitted.DNS
+		convertOpts.DNSRuleSet = emitted.RuleSet
+		convertOpts.ChainDomainResolver = emitted.ChainResolver
+		convertOpts.Sniff = dnsCfg.Sniff
+		convertOpts.SniffOverride = dnsCfg.SniffOverride
+		convertOpts.SniffTimeout = dnsCfg.SniffTimeout
+		convertOpts.ResolveStrategy = dnsCfg.Strategy
+	}
+	raw, err := converter.Convert(inbounds, convertOpts)
 	if err != nil {
 		return Result{}, err
 	}

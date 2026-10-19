@@ -345,6 +345,14 @@ func (s *Server) handleUpdateNode(w http.ResponseWriter, r *http.Request) {
 		egressInterface := strings.TrimSpace(*body.EgressInterface)
 		body.EgressInterface = &egressInterface
 	}
+	if body.DNS != nil {
+		cfg := *body.DNS
+		if err := cfg.Normalize(); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		body.DNS = &cfg
+	}
 	if body.ControlMode != nil {
 		mode := strings.TrimSpace(*body.ControlMode)
 		body.ControlMode = &mode

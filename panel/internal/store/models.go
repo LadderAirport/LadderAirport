@@ -1,5 +1,7 @@
 package store
 
+import "github.com/ladderairport/pkg/nodedns"
+
 // PortMapping rewrites an agent listen port to the client-facing NAT/public port.
 // Used only when rendering subscriptions; agent configs still use the inbound listen port.
 type PortMapping struct {
@@ -47,6 +49,9 @@ type Node struct {
 	// EgressInterface is the host NIC name for sing-box direct bind_interface.
 	// Empty means OS default routing.
 	EgressInterface string `json:"egress_interface"`
+	// DNS is the per-node sing-box resolver. Empty storage is filled with
+	// nodedns.Default on read; new nodes are persisted with that default.
+	DNS nodedns.Config `json:"dns"`
 	// DDNSEnabled lets the DNS reconcile worker probe this node's public
 	// address (managed domains with address_source=agent_public). New nodes
 	// default to true; false pauses probing while keeping the schedule.
@@ -125,17 +130,18 @@ type FRPServerConfig struct {
 // NodeOperatorUpdate contains only fields controlled by an operator. Runtime
 // status, metrics, versions and config hashes are deliberately excluded.
 type NodeOperatorUpdate struct {
-	Name            *string        `json:"name"`
-	Address         *string        `json:"address"`
-	GRPCPort        *int           `json:"grpc_port"`
-	Token           *string        `json:"token"`
-	Labels          *[]string      `json:"labels"`
-	PublicAddress   *string        `json:"public_address"`
-	PortMappings    *[]PortMapping `json:"port_mappings"`
-	EgressInterface *string        `json:"egress_interface"`
-	DDNSEnabled     *bool          `json:"ddns_enabled"`
-	ControlMode     *string        `json:"control_mode"`
-	DesiredRuntime  *string        `json:"desired_runtime"`
+	Name            *string         `json:"name"`
+	Address         *string         `json:"address"`
+	GRPCPort        *int            `json:"grpc_port"`
+	Token           *string         `json:"token"`
+	Labels          *[]string       `json:"labels"`
+	PublicAddress   *string         `json:"public_address"`
+	PortMappings    *[]PortMapping  `json:"port_mappings"`
+	EgressInterface *string         `json:"egress_interface"`
+	DNS             *nodedns.Config `json:"dns"`
+	DDNSEnabled     *bool           `json:"ddns_enabled"`
+	ControlMode     *string         `json:"control_mode"`
+	DesiredRuntime  *string         `json:"desired_runtime"`
 }
 
 // NodeReport is a partial live update from an Agent HTTP report.

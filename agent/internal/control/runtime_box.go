@@ -7,10 +7,12 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/ladderairport/agent/internal/frpcbridge"
+	"github.com/ladderairport/pkg/nodedns"
 	box "github.com/sagernet/sing-box"
 	"github.com/sagernet/sing-box/common/urltest"
 	"github.com/sagernet/sing-box/constant"
@@ -388,47 +390,151 @@ func ensureDefaultDNS(configJSON string) (string, error) {
 			needsDefault = true
 		}
 	}
-	if needsDefault {
-		defaultDNS := map[string]any{
-			"servers": []map[string]any{
-				{
-					"type":        "udp",
-					"tag":         "default-dns-alidns",
-					"server":      "223.5.5.5",
-					"server_port": 53,
-				},
-				{
-					"type":        "udp",
-					"tag":         "default-dns-dnspod",
-					"server":      "119.29.29.29",
-					"server_port": 53,
-				},
-				{
-					"type":        "udp",
-					"tag":         "default-dns-cf",
-					"server":      "1.1.1.1",
-					"server_port": 53,
-				},
-				{
-					"type":        "udp",
-					"tag":         "default-dns-google",
-					"server":      "8.8.8.8",
-					"server_port": 53,
-				},
-			},
-		}
-		data, err := stdjson.Marshal(defaultDNS)
-		if err != nil {
-			return "", fmt.Errorf("编码默认 DNS 失败：%w", err)
-		}
-		document["dns"] = data
-		updated, err := stdjson.Marshal(document)
-		if err != nil {
-			return "", fmt.Errorf("编码节点配置失败：%w", err)
-		}
-		return string(updated), nil
+	if !needsDefault {
+		return configJSON, nil
 	}
-	return configJSON, nil
+	emitted, err := nodedns.Default().Emit(nodedns.EmitOptions{BindInterface: directBindInterface(document)})
+	if err != nil {
+		return "", fmt.Errorf("编码默认 DNS 失败：%w", err)
+	}
+	data, err := stdjson.Marshal(emitted.DNS)
+	if err != nil {
+		return "", fmt.Errorf("编码默认 DNS 失败：%w", err)
+	}
+	document["dns"] = data
+	if err := mergeGeositeRuleSet(document, emitted.RuleSet); err != nil {
+		return "", err
+	}
+	if err := ensureChainDomainResolvers(document, emitted.ChainResolver); err != nil {
+		return "", err
+	}
+	updated, err := stdjson.Marshal(document)
+	if err != nil {
+		return "", fmt.Errorf("编码节点配置失败：%w", err)
+	}
+	return string(updated), nil
+}
+
+func directBindInterface(document map[string]stdjson.RawMessage) string {
+	raw, ok := document["outbounds"]
+	if !ok {
+		return ""
+	}
+	var outbounds []map[string]any
+	if err := stdjson.Unmarshal(raw, &outbounds); err != nil {
+		return ""
+	}
+	for _, outbound := range outbounds {
+		if outbound["tag"] != "direct" && outbound["type"] != "direct" {
+			continue
+		}
+		bind, _ := outbound["bind_interface"].(string)
+		return strings.TrimSpace(bind)
+	}
+	return ""
+}
+
+func mergeGeositeRuleSet(document map[string]stdjson.RawMessage, ruleSet map[string]any) error {
+	route := map[string]any{}
+	if raw, ok := document["route"]; ok {
+		if err := stdjson.Unmarshal(raw, &route); err != nil {
+			return fmt.Errorf("解析路由配置失败：%w", err)
+		}
+	}
+	if sets, ok := route["rule_set"].([]any); ok {
+		for _, item := range sets {
+			entry, _ := item.(map[string]any)
+			if entry["tag"] == nodedns.RuleSetGeositeCN {
+				return nil
+			}
+		}
+		route["rule_set"] = append(sets, ruleSet)
+	} else {
+		route["rule_set"] = []any{ruleSet}
+	}
+	data, err := stdjson.Marshal(route)
+	if err != nil {
+		return fmt.Errorf("编码路由配置失败：%w", err)
+	}
+	document["route"] = data
+	return nil
+}
+
+func ensureChainDomainResolvers(document map[string]stdjson.RawMessage, resolver map[string]any) error {
+	raw, ok := document["outbounds"]
+	if !ok {
+		return nil
+	}
+	var outbounds []map[string]any
+	if err := stdjson.Unmarshal(raw, &outbounds); err != nil {
+		return fmt.Errorf("解析出站配置失败：%w", err)
+	}
+	changed := false
+	for _, outbound := range outbounds {
+		kind, _ := outbound["type"].(string)
+		switch kind {
+		case "direct", "block", "dns", "":
+			continue
+		}
+		if _, exists := outbound["domain_resolver"]; exists {
+			continue
+		}
+		cloned := make(map[string]any, len(resolver))
+		for key, value := range resolver {
+			cloned[key] = value
+		}
+		outbound["domain_resolver"] = cloned
+		changed = true
+	}
+	if !changed {
+		return nil
+	}
+	data, err := stdjson.Marshal(outbounds)
+	if err != nil {
+		return fmt.Errorf("编码出站配置失败：%w", err)
+	}
+	document["outbounds"] = data
+	return nil
+}
+
+// stripDNSServerBinds removes bind_interface from dns.servers. Android node
+// builds cannot honor it; called from the Android sanitizer so a pushed config
+// cannot fail dial.
+func stripDNSServerBinds(document map[string]stdjson.RawMessage) (bool, error) {
+	raw, ok := document["dns"]
+	if !ok {
+		return false, nil
+	}
+	var dns map[string]any
+	if err := stdjson.Unmarshal(raw, &dns); err != nil {
+		return false, nil
+	}
+	servers, ok := dns["servers"].([]any)
+	if !ok {
+		return false, nil
+	}
+	changed := false
+	for _, item := range servers {
+		server, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		bind, has := server["bind_interface"]
+		if !has || bind == nil || bind == "" {
+			continue
+		}
+		delete(server, "bind_interface")
+		changed = true
+	}
+	if !changed {
+		return false, nil
+	}
+	data, err := stdjson.Marshal(dns)
+	if err != nil {
+		return false, fmt.Errorf("编码 DNS 配置失败：%w", err)
+	}
+	document["dns"] = data
+	return true, nil
 }
 
 func splitFRPCConfig(configJSON string) (string, map[string]string, error) {

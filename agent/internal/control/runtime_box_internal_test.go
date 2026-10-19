@@ -2,6 +2,7 @@ package control
 
 import (
 	"context"
+	stdjson "encoding/json"
 	"testing"
 )
 
@@ -72,8 +73,11 @@ func TestEnsureDefaultDNS(t *testing.T) {
 	if opts1.DNS == nil || len(opts1.DNS.Servers) == 0 {
 		t.Fatalf("expected default DNS servers to be injected, got %#v", opts1.DNS)
 	}
-	if opts1.DNS.Servers[0].Tag != "default-dns-alidns" {
-		t.Fatalf("expected first server to be default-dns-alidns, got %s", opts1.DNS.Servers[0].Tag)
+	if opts1.DNS.Servers[0].Tag != "doh-ali" || opts1.DNS.Final != "doh-cf" {
+		t.Fatalf("expected DoH defaults, got tag %s final %s", opts1.DNS.Servers[0].Tag, opts1.DNS.Final)
+	}
+	if opts1.Route == nil || len(opts1.Route.RuleSet) != 1 || opts1.Route.RuleSet[0].Tag != "geosite-cn" {
+		t.Fatalf("expected geosite-cn rule set, got %#v", opts1.Route)
 	}
 
 	// Case 2: existing custom dns block is preserved
@@ -107,4 +111,56 @@ func TestEnsureDefaultDNS(t *testing.T) {
 	}
 }
 
+func TestEnsureDefaultDNSBindsAndResolvesNextHop(t *testing.T) {
+	cfg := `{
+		"outbounds": [
+			{"type": "direct", "tag": "direct", "bind_interface": "eth0"},
+			{"type": "shadowsocks", "tag": "chain-next", "server": "next.example", "server_port": 443, "method": "aes-128-gcm", "password": "pw"}
+		]
+	}`
+	prepared, err := prepareConfigJSON(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := NewBoxRuntime(t.TempDir())
+	if _, err := r.parseOptions(prepared); err != nil {
+		t.Fatalf("parseOptions: %v\n%s", err, prepared)
+	}
+	var document map[string]any
+	if err := stdjson.Unmarshal([]byte(prepared), &document); err != nil {
+		t.Fatal(err)
+	}
+	dns := document["dns"].(map[string]any)
+	servers := dns["servers"].([]any)
+	if servers[0].(map[string]any)["bind_interface"] != "eth0" {
+		t.Fatalf("dns bind = %#v", servers[0])
+	}
+	outbounds := document["outbounds"].([]any)
+	resolver, _ := outbounds[1].(map[string]any)["domain_resolver"].(map[string]any)
+	if resolver["server"] != "doh-cf" || resolver["strategy"] != "ipv4_only" {
+		t.Fatalf("domain_resolver = %#v", outbounds[1])
+	}
+	if _, ok := outbounds[0].(map[string]any)["domain_resolver"]; ok {
+		t.Fatal("direct outbound must not set domain_resolver")
+	}
+}
 
+func TestStripDNSServerBinds(t *testing.T) {
+	raw := []byte(`{"dns":{"servers":[{"type":"https","tag":"doh-cf","server":"1.1.1.1","bind_interface":"wlan0"}]}}`)
+	var document map[string]stdjson.RawMessage
+	if err := stdjson.Unmarshal(raw, &document); err != nil {
+		t.Fatal(err)
+	}
+	changed, err := stripDNSServerBinds(document)
+	if err != nil || !changed {
+		t.Fatalf("changed=%v err=%v", changed, err)
+	}
+	var dns map[string]any
+	if err := stdjson.Unmarshal(document["dns"], &dns); err != nil {
+		t.Fatal(err)
+	}
+	server := dns["servers"].([]any)[0].(map[string]any)
+	if _, ok := server["bind_interface"]; ok {
+		t.Fatalf("bind still present: %#v", server)
+	}
+}
