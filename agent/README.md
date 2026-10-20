@@ -7,7 +7,7 @@ In-process **sing-box + optional FRPS** agent: gRPC `AgentControl` with independ
 | Item | Value |
 |------|--------|
 | Upstream | [SagerNet/sing-box](https://github.com/SagerNet/sing-box) |
-| Pinned tag | **v1.12.22** |
+| Pinned tag | **v1.14.3** |
 | Submodule path | `agent/sing-box` |
 | Go module | `github.com/sagernet/sing-box` |
 
@@ -23,7 +23,7 @@ FRPS follows the same source pinning model:
 `agent/go.mod` uses:
 
 ```go
-require github.com/sagernet/sing-box v1.12.22
+require github.com/sagernet/sing-box v1.14.3
 replace github.com/sagernet/sing-box => ./sing-box
 ```
 
@@ -33,13 +33,13 @@ replace github.com/sagernet/sing-box => ./sing-box
 
 ```bash
 git submodule update --init --recursive
-cd agent/sing-box && git checkout v1.12.22
+cd agent/sing-box && git checkout v1.14.3
 ```
 
 If `git submodule add` fails (network), shallow clone then wire replace:
 
 ```bash
-git clone --depth 1 --branch v1.12.22 https://github.com/SagerNet/sing-box.git agent/sing-box
+git clone --depth 1 --branch v1.14.3 https://github.com/SagerNet/sing-box.git agent/sing-box
 ```
 
 ## Runtime
@@ -63,16 +63,18 @@ Or:
 ```bash
 cd agent
 go build -tags "with_quic,with_utls" \
-  -ldflags "-X 'github.com/sagernet/sing-box/constant.Version=1.12.22'" \
+  -ldflags "-checklinkname=0 -X 'github.com/sagernet/sing-box/constant.Version=1.14.3'" \
   -o ../bin/ladder-agent ./cmd/ladder-agent
 ```
+
+`-checklinkname=0` is required for `GOOS=android`. `github.com/wlynxg/anet` linknames `net.zoneCache`, and the Go linker rejects that without the flag. Linux builds link either way. sing-box's own libbox build passes the same flag, plus the `badlinkname` and `tfogo_checklinkname0` tags.
 
 Optional full feature tags (match upstream Makefile extras):
 
 ```bash
 cd agent
 go build -tags "with_gvisor,with_quic,with_wireguard,with_utls,with_clash_api" \
-  -ldflags "-X 'github.com/sagernet/sing-box/constant.Version=1.12.22'" \
+  -ldflags "-checklinkname=0 -X 'github.com/sagernet/sing-box/constant.Version=1.14.3'" \
   -o ../bin/ladder-agent ./cmd/ladder-agent
 ```
 
@@ -82,7 +84,7 @@ go build -tags "with_gvisor,with_quic,with_wireguard,with_utls,with_clash_api" \
 |-----------|------------|
 | Shadowsocks, Trojan, VLESS, VMess | default registries |
 | TUIC, Hysteria2 | **`with_quic`** (default in `make agent` / CI) |
-| AnyTLS | sing-box **≥ 1.12** (pin v1.12.22) |
+| AnyTLS | sing-box **≥ 1.12** (pin v1.14.3) |
 | Reality client fingerprint paths | **`with_utls`** (default) |
 
 ## Tests
@@ -123,7 +125,7 @@ All Apply/Start/Stop share one mutex — concurrent Panel RPCs queue, never dual
 
 ## Upgrade policy
 
-1. Bump submodule to a new **stable** tag (`v1.12.x` or `v1.13.x`).
+1. Bump submodule to a new **stable** tag (`v1.14.x`, currently v1.14.3).
 2. Update the `agent/go.mod` require version + comment and the `SingboxVersion` fallback in `runtime_box.go`; Makefile and CI derive `SINGBOX_VERSION` from the submodule tag automatically.
 3. Fix glue under `agent/internal` only if APIs break.
 4. Run `make test` and a short Apply/Start smoke.

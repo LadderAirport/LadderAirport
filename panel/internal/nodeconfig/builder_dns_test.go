@@ -35,6 +35,47 @@ func TestBuildOmitsDNSUntilSingbox112(t *testing.T) {
 	}
 }
 
+func TestBuildEmitsFailoverOn114(t *testing.T) {
+	st := openRouteRuleStore(t)
+	node, _ := addNodeWithInbound(t, st, "new", "192.0.2.22", 12021)
+	loaded, err := st.GetNode(node.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded.SingboxVersion = "1.14.3"
+	if err := st.UpdateNode(loaded); err != nil {
+		t.Fatal(err)
+	}
+	result, err := (&Builder{Store: st}).Build(node.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg map[string]any
+	if err := json.Unmarshal([]byte(result.JSON), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	dns := cfg["dns"].(map[string]any)
+	if dns["final"] != "doh-google" {
+		t.Fatalf("final = %v", dns["final"])
+	}
+	rules, _ := dns["rules"].([]any)
+	if len(rules) != 9 || rules[0].(map[string]any)["server"] != "doh-ali" {
+		t.Fatalf("rules = %v", rules)
+	}
+	if _, ok := dns["independent_cache"]; ok {
+		t.Fatal("independent_cache is deprecated on 1.14")
+	}
+	inbound := cfg["inbounds"].([]any)[0].(map[string]any)
+	if _, ok := inbound["sniff"]; ok {
+		t.Fatalf("1.13+ must not emit inbound sniff: %v", inbound)
+	}
+	route := cfg["route"].(map[string]any)
+	routeRules := route["rules"].([]any)
+	if routeRules[0].(map[string]any)["action"] != "sniff" {
+		t.Fatalf("route sniff = %v", routeRules[0])
+	}
+}
+
 func TestBuildEmitsPerNodeDNS(t *testing.T) {
 	st := openRouteRuleStore(t)
 	node, inA := addNodeAndInbound(t, st, "exit", "192.0.2.21", 12011)

@@ -120,7 +120,10 @@ func (b *Builder) BuildWithChains(nodeID string, chains []store.ProxyChain) (Res
 		if err := dnsCfg.Normalize(); err != nil {
 			return Result{}, fmt.Errorf("节点 DNS：%w", err)
 		}
-		emitted, err := dnsCfg.Emit(nodedns.EmitOptions{BindInterface: bindInterface})
+		emitted, err := dnsCfg.Emit(nodedns.EmitOptions{
+			BindInterface: bindInterface,
+			Failover:      nodedns.SupportsFailover(node.SingboxVersion),
+		})
 		if err != nil {
 			return Result{}, fmt.Errorf("节点 DNS：%w", err)
 		}
@@ -130,6 +133,7 @@ func (b *Builder) BuildWithChains(nodeID string, chains []store.ProxyChain) (Res
 		convertOpts.Sniff = dnsCfg.Sniff
 		convertOpts.SniffOverride = dnsCfg.SniffOverride
 		convertOpts.SniffTimeout = dnsCfg.SniffTimeout
+		convertOpts.DropInboundSniff = nodedns.DropsInboundSniffFields(node.SingboxVersion)
 		convertOpts.ResolveStrategy = dnsCfg.Strategy
 	}
 	raw, err := converter.Convert(inbounds, convertOpts)

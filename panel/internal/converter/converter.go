@@ -35,12 +35,14 @@ type ConvertOptions struct {
 	// ChainDomainResolver is copied onto chain outbounds (not direct) so the
 	// next-hop hostname resolves without detouring through the chain itself.
 	ChainDomainResolver map[string]any
-	// Sniff, when DNS is also set, enables inbound sniff and a leading route
-	// sniff action. SniffOverride rewrites an IP destination to the sniffed
-	// domain so domain route-plan rules can match.
-	Sniff         bool
-	SniffOverride bool
-	SniffTimeout  string
+	// Sniff, when DNS is also set, enables a leading route sniff action.
+	// SniffOverride also sets the legacy inbound sniff_override_destination
+	// field. sing-box 1.13 removed that field; set DropInboundSniff for those
+	// cores. Domain rules still match the sniffed name.
+	Sniff            bool
+	SniffOverride    bool
+	SniffTimeout     string
+	DropInboundSniff bool
 	// ResolveStrategy inserts an action resolve (no server, so dns.rules still
 	// apply) immediately before ip_cidr rules when DNS is set and at least one
 	// ip_cidr rule is emitted.
@@ -92,7 +94,7 @@ func Convert(inbounds []store.InboundConfig, opts ConvertOptions) ([]byte, error
 		}
 		seenPorts[key] = label(in)
 		inboundTags[in.ID] = inboundTag(in)
-		if opts.DNS != nil && opts.Sniff {
+		if opts.DNS != nil && opts.Sniff && !opts.DropInboundSniff {
 			mapped["sniff"] = true
 			if opts.SniffOverride {
 				mapped["sniff_override_destination"] = true

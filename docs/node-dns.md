@@ -28,9 +28,13 @@ Panel 在生成节点配置时把 URL 拆成 sing-box 1.12 的 typed server：`t
 
 ## 列表怎么用
 
-sing-box 1.12 没有 DNS 健康检查，也没有故障转移。列表顺序的含义只有一条：第一行是 `dns.final`。节点上的查询，以及链出站的 `domain_resolver`，都用这一行。
+上报的 sing-box 低于 1.14 时，列表顺序的含义只有一条：第一行是 `dns.final`。节点上的查询都走它。其余行会写进 `dns.servers`，但没有规则指向它们。sing-box 1.12 没有故障转移，也没有健康检查。
 
-其余行会按顺序写进 `dns.servers`，但没有 DNS 规则指向它们，所以不会接到查询。它们是排好的备选：要换上游，把它移到第一行。界面上没有逐行启用开关。没有在 Agent 里做健康探测再改写 final：探测要反复重载 sing-box，超时和误判都不可靠。
+1.14 及更新的核心会按顺序尝试。每一行先 `evaluate`，超时 2 秒。传输失败、超时、SERVFAIL，或 NOERROR 但没有任何地址，都改试下一行。NXDOMAIN 视为确定结果，不再往下试。最后一行是 `dns.final`，前面都失败时原样返回它的结果。用来引导主机名的 `dns-system` 不参加这串查询。
+
+链出站的 `domain_resolver` 仍指向第一行。1.14 在填了 `server` 时会跳过 DNS 规则，而且有多台 DNS 时又必须填写，否则启动失败。所以下一跳主机名只用第一行，用户目标的 `resolve` 才走上面的故障转移。
+
+界面上没有逐行启用开关。没有在 Agent 里做健康探测再改写 final。
 
 默认顺序是 AliDNS、DNSPod、Cloudflare、Google。因此新建节点的 final 是 AliDNS（`doh-ali`）。这和以前按域名拆开用的规则不同：不再有 `.cn`、`geosite-cn` 或「AAAA 走 Google」。
 
@@ -67,9 +71,9 @@ sing-box 不低于 1.12 时，节点配置还会：
 1. 入站嗅探内层 TLS / HTTP / QUIC（默认开，超时 300ms）。`sniff_override_destination` 默认开，把 IP 目标改成嗅探到的域名，域名路由计划才能命中。路由规则最前面还有一条 `action: sniff`。
 2. 代理链入站规则仍在域名规则之前，避免链上流量被路由计划抢走。
 3. 域名、后缀、关键字规则。
-4. 计划里有 `ip_cidr` 时，在这些规则前插入 `action: resolve`，不指定 server，因此走 `dns.final`。策略用节点上的地址策略。
-5. `direct` 出站不设 `domain_resolver`，用户目标走 `dns.final`。
-6. 链出站设置 `domain_resolver`，server 为第一行 DNS，策略 `ipv4_only`。只解析下一跳主机名，不把 DNS detour 进这条链。
+4. 计划里有 `ip_cidr` 时，在这些规则前插入 `action: resolve`，不指定 server。1.12 因此只查 `dns.final`；1.14 会走上面的故障转移规则。策略用节点上的地址策略。
+5. `direct` 出站不设 `domain_resolver`。用户目标由上一条 `resolve` 解析，不在 `direct` 上另做一次查找。
+6. 链出站设置 `domain_resolver`，server 为第一行 DNS，策略 `ipv4_only`。只解析下一跳主机名，不把 DNS detour 进这条链。1.14 上这个查找不走故障转移规则。
 
 出口网卡非空时，`direct`、链出站和每一台下发的 DNS 服务器都带同一个 `bind_interface`。节点 DNS 不再附带 `geosite-cn` rule-set。
 
@@ -82,4 +86,8 @@ sing-box 不低于 1.12 时，节点配置还会：
 
 Panel 只在上报的 `singbox_version` 能解析且不低于 1.12.0 时写入新的 `dns` 块、嗅探和 `domain_resolver`。版本为空或更低时，下发的 JSON 与原来一样，旧 Agent 不受影响。
 
-新 Agent 在收到的配置没有 `dns`（或 `servers` 为空）时，会注入同一组 DoH 默认值，final 为第一行，并给链出站补上指向它的 `domain_resolver`。出口网卡会从 `direct` 出站抄到 DNS 服务器上。配置里已经有 DNS 时，Agent 原样保留。1.12 之前的 Agent 二进制没有这段逻辑，仍使用它们自己的旧默认值。
+1.13 起不再写入入站上的 `sniff` / `sniff_override_destination` / `sniff_timeout` / `domain_strategy`。1.14 解析时直接拒绝这些字段。1.14 Agent 会在启动前把它们从入站上删掉，所以一份 1.12 配置仍能启动。路由规则里的 `action: sniff` 仍然下发，域名规则匹配嗅探到的名字。`sniff_override_destination` 没有替代字段，删掉之后拨号目标保持原来的地址。
+
+故障转移规则只在不低于 1.14.0 时下发。1.12 节点仍只查询第一行。1.14 不再下发已废弃的 `independent_cache`。旧的 DNS 服务器地址写法（`address: "https://..."` 这种 legacy 格式）和 DNS 规则里的 `outbound` 项在 1.14 已删除；节点配置本来就不用它们。
+
+这台 1.14 Agent 在收到的配置没有 `dns`（或 `servers` 为空）时，会注入同一组 DoH 默认值和故障转移规则，`dns.final` 是最后一行，并给链出站补上指向第一行的 `domain_resolver`。出口网卡会从 `direct` 出站抄到 DNS 服务器上。配置里已经有 DNS 时，Agent 原样保留，不会自行补规则。1.12 Agent 没有这段逻辑。

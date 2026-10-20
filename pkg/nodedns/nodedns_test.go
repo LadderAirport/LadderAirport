@@ -200,6 +200,63 @@ func TestURLForms(t *testing.T) {
 	}
 }
 
+func TestFailoverTriesEarlierRowsThenFinal(t *testing.T) {
+	if !SupportsFailover("1.14.3") || !SupportsFailover("v1.14.0") || SupportsFailover("1.13.9") || SupportsFailover("1.12.22") {
+		t.Fatal("failover gate")
+	}
+	if !DropsInboundSniffFields("1.13.0") || DropsInboundSniffFields("1.12.22") {
+		t.Fatal("inbound sniff gate")
+	}
+	cfg := Config{Servers: []Server{
+		{Name: "one", URL: "udp://1.1.1.1"},
+		{Name: "two", URL: "udp://1.0.0.1"},
+		{Name: "three", URL: "https://dns.google/dns-query"},
+	}}
+	emitted, err := cfg.Emit(EmitOptions{Failover: true, BindInterface: "eth0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if emitted.DNS["final"] != "three" || emitted.DNS["timeout"] != failoverQueryTimeout {
+		t.Fatalf("dns = %#v", emitted.DNS)
+	}
+	if _, ok := emitted.DNS["independent_cache"]; ok {
+		t.Fatal("1.14 emit must drop deprecated independent_cache")
+	}
+	rules, _ := emitted.DNS["rules"].([]map[string]any)
+	if len(rules) != 6 {
+		t.Fatalf("rules = %#v", rules)
+	}
+	if rules[0]["action"] != "evaluate" || rules[0]["server"] != "one" || rules[0]["disable_cache"] != true {
+		t.Fatalf("first evaluate = %#v", rules[0])
+	}
+	if rules[1]["response_rcode"] != "NXDOMAIN" || rules[1]["action"] != "respond" {
+		t.Fatalf("nxdomain = %#v", rules[1])
+	}
+	if rules[2]["ip_accept_any"] != true || rules[3]["server"] != "two" {
+		t.Fatalf("rules = %#v", rules)
+	}
+	if emitted.ChainResolver["server"] != "one" || emitted.ChainResolver["timeout"] != failoverQueryTimeout {
+		t.Fatalf("chain resolver stays on the first row: %#v", emitted.ChainResolver)
+	}
+	servers := emitted.DNS["servers"].([]map[string]any)
+	google := servers[2]
+	resolver := google["domain_resolver"].(map[string]any)
+	if resolver["server"] != "one" || google["bind_interface"] != "eth0" {
+		t.Fatalf("hostname bootstrap = %#v", google)
+	}
+
+	single, err := (Config{Servers: []Server{{Name: "only", URL: "udp://9.9.9.9"}}}).Emit(EmitOptions{Failover: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if single.DNS["final"] != "only" {
+		t.Fatalf("single = %#v", single.DNS)
+	}
+	if _, ok := single.DNS["rules"]; ok {
+		t.Fatal("one server needs no failover rules")
+	}
+}
+
 func TestNormalizeRejectsBadRows(t *testing.T) {
 	cfg := Config{Servers: []Server{{Name: "bad", URL: "udp://dns.google"}}}
 	err := cfg.Normalize()

@@ -75,8 +75,8 @@ func TestEnsureDefaultDNS(t *testing.T) {
 	if opts1.DNS == nil || len(opts1.DNS.Servers) == 0 {
 		t.Fatalf("expected default DNS servers to be injected, got %#v", opts1.DNS)
 	}
-	if opts1.DNS.Servers[0].Tag != "doh-ali" || opts1.DNS.Final != "doh-ali" {
-		t.Fatalf("expected DoH defaults, got tag %s final %s", opts1.DNS.Servers[0].Tag, opts1.DNS.Final)
+	if opts1.DNS.Servers[0].Tag != "doh-ali" || opts1.DNS.Final != "doh-google" || len(opts1.DNS.Rules) == 0 {
+		t.Fatalf("expected ordered failover, got tag %s final %s rules %d", opts1.DNS.Servers[0].Tag, opts1.DNS.Final, len(opts1.DNS.Rules))
 	}
 	if opts1.Route != nil && len(opts1.Route.RuleSet) != 0 {
 		t.Fatalf("default DNS must not add a rule set, got %#v", opts1.Route.RuleSet)
