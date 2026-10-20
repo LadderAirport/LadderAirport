@@ -176,6 +176,8 @@ export interface Node {
   pki_not_after_unix?: number
   /** Host NIC for sing-box direct bind_interface; empty = OS default route. */
   egress_interface?: string
+  /** Per-node sing-box 1.12 DNS. The API always returns the prefilled defaults. */
+  dns?: NodeDNS
   /** When false, managed domains with address_source=agent_public pause probing. */
   ddns_enabled?: boolean
   /** push = Panel dials Agent gRPC; uplink = Agent reports/pulls over Panel HTTP. */
@@ -680,6 +682,47 @@ export interface CreateNodeInput {
   control_mode?: 'push' | 'uplink'
 }
 
+/** One DNS row. The panel parses url into a sing-box 1.12 server when it builds the node config. */
+export interface NodeDNSServer {
+  name: string
+  url: string
+}
+
+/** Per-node DNS. Server order is the list order; the first row is final. */
+export interface NodeDNS {
+  strategy: string
+  sniff: boolean
+  sniff_override_destination: boolean
+  sniff_timeout: string
+  independent_cache: boolean
+  cache_capacity: number
+  reverse_mapping: boolean
+  disable_expire: boolean
+  disable_cache: boolean
+  client_subnet?: string
+  servers: NodeDNSServer[]
+}
+
+/** Matches pkg/nodedns.Default. The first row is final. */
+export const DEFAULT_NODE_DNS: NodeDNS = {
+  strategy: 'prefer_ipv4',
+  sniff: true,
+  sniff_override_destination: true,
+  sniff_timeout: '300ms',
+  independent_cache: true,
+  cache_capacity: 2048,
+  reverse_mapping: true,
+  disable_expire: false,
+  disable_cache: false,
+  client_subnet: '',
+  servers: [
+    { name: 'doh-ali', url: 'https://223.5.5.5/dns-query' },
+    { name: 'doh-dnspod', url: 'https://1.12.12.12/dns-query' },
+    { name: 'doh-cf', url: 'https://1.1.1.1/dns-query' },
+    { name: 'doh-google', url: 'https://8.8.8.8/dns-query' },
+  ],
+}
+
 export interface UpdateNodeInput {
   name?: string
   address?: string
@@ -688,6 +731,7 @@ export interface UpdateNodeInput {
   token?: string
   labels?: string[]
   egress_interface?: string
+  dns?: NodeDNS
   port_mappings?: PortMapping[]
   ddns_enabled?: boolean
   control_mode?: 'push' | 'uplink'

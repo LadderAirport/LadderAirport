@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/ladderairport/panel/internal/inboundfill"
+	"github.com/ladderairport/pkg/nodedns"
 	_ "modernc.org/sqlite"
 )
 
@@ -553,6 +554,7 @@ func (s *Store) migrate() error {
 		`ALTER TABLE nodes ADD COLUMN control_mode TEXT NOT NULL DEFAULT 'push'`,
 		`ALTER TABLE nodes ADD COLUMN desired_runtime TEXT NOT NULL DEFAULT 'running'`,
 		`ALTER TABLE nodes ADD COLUMN uplink_last_seen_unix INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE nodes ADD COLUMN dns_json TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE nodes ADD COLUMN agent_enrolled INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE node_frps_configs ADD COLUMN managed_domain_id TEXT REFERENCES managed_domains(id) ON DELETE SET NULL`,
 		`ALTER TABLE node_inbounds ADD COLUMN public_address TEXT NOT NULL DEFAULT ''`,
@@ -803,6 +805,10 @@ func (s *Store) CreateNode(n *Node) error {
 	if err != nil {
 		return fmt.Errorf("编码节点能力失败：%w", err)
 	}
+	dnsJSON, err := encodeNodeDNS(&n.DNS)
+	if err != nil {
+		return err
+	}
 	_, err = s.db.Exec(`
 		INSERT INTO nodes (
 			id, name, address, grpc_port, token, labels_json,
@@ -811,8 +817,9 @@ func (s *Store) CreateNode(n *Node) error {
 			runtime_state, agent_version, singbox_version,
 			connections, uplink_bytes, downlink_bytes, cpu_percent, memory_rss_bytes,
 			metrics_at_unix, last_error, egress_interface, public_address, port_mappings_json, capabilities_json,
-			ddns_enabled, control_mode, desired_runtime, uplink_last_seen_unix, created_at_unix, updated_at_unix
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			ddns_enabled, control_mode, desired_runtime, uplink_last_seen_unix, created_at_unix, updated_at_unix,
+			dns_json
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		n.ID, n.Name, n.Address, n.GRPCPort, n.Token, labelsJSON, n.PKICABundlePEM,
 		n.PKICertSerial, n.PKINotAfter,
 		n.Status, n.LastSeenUnix, n.ConfigHash,
@@ -820,6 +827,7 @@ func (s *Store) CreateNode(n *Node) error {
 		n.Connections, n.UplinkBytes, n.DownlinkBytes, n.CPUPercent, n.MemoryRSSBytes,
 		n.MetricsAtUnix, n.LastError, n.EgressInterface, n.PublicAddress, mappingsJSON, capabilitiesJSON,
 		boolToInt(n.DDNSEnabled), n.ControlMode, n.DesiredRuntime, n.UplinkLastSeenUnix, n.CreatedAtUnix, n.UpdatedAtUnix,
+		dnsJSON,
 	)
 	if err != nil {
 		return fmt.Errorf("创建节点失败：%w", err)
@@ -858,6 +866,10 @@ func (s *Store) UpdateNode(n *Node) error {
 	if err != nil {
 		return fmt.Errorf("编码节点能力失败：%w", err)
 	}
+	dnsJSON, err := encodeNodeDNS(&n.DNS)
+	if err != nil {
+		return err
+	}
 	res, err := s.db.Exec(`
 		UPDATE nodes SET
 			name = ?, address = ?, grpc_port = ?, token = ?, labels_json = ?,
@@ -871,6 +883,7 @@ func (s *Store) UpdateNode(n *Node) error {
 			metrics_at_unix = ?, last_error = ?, egress_interface = ?, public_address = ?,
 			port_mappings_json = ?, capabilities_json = ?, ddns_enabled = ?,
 			control_mode = ?, desired_runtime = ?, uplink_last_seen_unix = ?,
+			dns_json = ?,
 			updated_at_unix = ?
 		WHERE id = ?`,
 		n.Name, n.Address, n.GRPCPort, n.Token, labelsJSON,
@@ -883,6 +896,7 @@ func (s *Store) UpdateNode(n *Node) error {
 		n.MetricsAtUnix, n.LastError, n.EgressInterface, n.PublicAddress,
 		mappingsJSON, capabilitiesJSON, boolToInt(n.DDNSEnabled),
 		n.ControlMode, n.DesiredRuntime, n.UplinkLastSeenUnix,
+		dnsJSON,
 		n.UpdatedAtUnix, n.ID,
 	)
 	if err != nil {
@@ -947,6 +961,14 @@ func (s *Store) UpdateNodeOperatorFields(id string, update NodeOperatorUpdate) e
 	}
 	if update.EgressInterface != nil {
 		add("egress_interface", *update.EgressInterface)
+	}
+	if update.DNS != nil {
+		cfg := *update.DNS
+		dnsJSON, err := encodeNodeDNS(&cfg)
+		if err != nil {
+			return err
+		}
+		add("dns_json", dnsJSON)
 	}
 	if update.DDNSEnabled != nil {
 		add("ddns_enabled", boolToInt(*update.DDNSEnabled))
@@ -1219,6 +1241,7 @@ func scanNode(row interface {
 	var mappingsJSON string
 	var capabilitiesJSON string
 	var ddnsEnabled int
+	var dnsJSON string
 	err := row.Scan(
 		&n.ID, &n.Name, &n.Address, &n.GRPCPort, &n.Token, &labelsJSON, &n.PKICABundlePEM,
 		&n.PKICertSerial, &n.PKINotAfter,
@@ -1228,6 +1251,7 @@ func scanNode(row interface {
 		&n.MetricsAtUnix, &n.LastError, &n.EgressInterface, &n.PublicAddress, &mappingsJSON, &capabilitiesJSON,
 		&ddnsEnabled, &n.ControlMode, &n.DesiredRuntime, &n.UplinkLastSeenUnix, &n.CreatedAtUnix, &n.UpdatedAtUnix,
 		&n.CoreVersion, &n.CoreCommit, &n.ClientType, &n.ClientVersion, &n.LuciVersion,
+		&dnsJSON,
 	)
 	if err != nil {
 		return nil, err
@@ -1252,6 +1276,10 @@ func scanNode(row interface {
 	if err := unmarshalJSON(capabilitiesJSON, &n.Capabilities); err != nil {
 		return nil, fmt.Errorf("解析节点能力失败：%w", err)
 	}
+	n.DNS, err = nodedns.Parse(dnsJSON)
+	if err != nil {
+		return nil, err
+	}
 	return &n, nil
 }
 
@@ -1262,7 +1290,7 @@ const nodeSelectCols = `id, name, address, grpc_port, token, labels_json, pki_ca
 	connections, uplink_bytes, downlink_bytes, cpu_percent, memory_rss_bytes,
 	metrics_at_unix, last_error, egress_interface, public_address, port_mappings_json, capabilities_json,
 	ddns_enabled, control_mode, desired_runtime, uplink_last_seen_unix, created_at_unix, updated_at_unix,
-	core_version, core_commit, client_type, client_version, luci_version`
+	core_version, core_commit, client_type, client_version, luci_version, dns_json`
 
 func (s *Store) GetNode(id string) (*Node, error) {
 	row := s.db.QueryRow(`SELECT `+nodeSelectCols+` FROM nodes WHERE id = ?`, id)

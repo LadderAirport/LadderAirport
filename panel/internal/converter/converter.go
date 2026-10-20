@@ -27,6 +27,24 @@ type ConvertOptions struct {
 	// Outbound must reference a known outbound tag ("direct" or a chain
 	// next-hop tag); rules with unknown or empty targets are skipped.
 	RouteRules []RouteRule
+	// DNS is the sing-box 1.12 dns object. Nil keeps the legacy config with
+	// no dns block, so agents older than 1.12 receive unchanged JSON.
+	DNS map[string]any
+	// DNSRuleSet is appended to route.rule_set when set. Node DNS does not emit one.
+	DNSRuleSet map[string]any
+	// ChainDomainResolver is copied onto chain outbounds (not direct) so the
+	// next-hop hostname resolves without detouring through the chain itself.
+	ChainDomainResolver map[string]any
+	// Sniff, when DNS is also set, enables inbound sniff and a leading route
+	// sniff action. SniffOverride rewrites an IP destination to the sniffed
+	// domain so domain route-plan rules can match.
+	Sniff         bool
+	SniffOverride bool
+	SniffTimeout  string
+	// ResolveStrategy inserts an action resolve (no server, so dns.rules still
+	// apply) immediately before ip_cidr rules when DNS is set and at least one
+	// ip_cidr rule is emitted.
+	ResolveStrategy string
 }
 
 type ChainRoute struct {
@@ -74,6 +92,15 @@ func Convert(inbounds []store.InboundConfig, opts ConvertOptions) ([]byte, error
 		}
 		seenPorts[key] = label(in)
 		inboundTags[in.ID] = inboundTag(in)
+		if opts.DNS != nil && opts.Sniff {
+			mapped["sniff"] = true
+			if opts.SniffOverride {
+				mapped["sniff_override_destination"] = true
+			}
+			if timeout := strings.TrimSpace(opts.SniffTimeout); timeout != "" {
+				mapped["sniff_timeout"] = timeout
+			}
+		}
 		outInbounds = append(outInbounds, mapped)
 	}
 
@@ -104,6 +131,11 @@ func Convert(inbounds []store.InboundConfig, opts ConvertOptions) ([]byte, error
 			return nil, fmt.Errorf("出站标签 %q 重复", outboundTag)
 		}
 		outboundTags[outboundTag] = true
+		if opts.ChainDomainResolver != nil {
+			if _, exists := route.Outbound["domain_resolver"]; !exists {
+				route.Outbound["domain_resolver"] = cloneMap(opts.ChainDomainResolver)
+			}
+		}
 		outbounds = append(outbounds, route.Outbound)
 		rules = append(rules, map[string]any{
 			"inbound":  []string{tag},
@@ -111,6 +143,9 @@ func Convert(inbounds []store.InboundConfig, opts ConvertOptions) ([]byte, error
 			"outbound": outboundTag,
 		})
 	}
+	var domainRules []map[string]any
+	var ipRules []map[string]any
+	splitIP := opts.DNS != nil
 	for _, rule := range opts.RouteRules {
 		condition := routeRuleCondition(rule.MatchType, rule.MatchValue)
 		if condition == nil {
@@ -118,22 +153,49 @@ func Convert(inbounds []store.InboundConfig, opts ConvertOptions) ([]byte, error
 		}
 		if rule.Reject {
 			condition["action"] = "reject"
-			rules = append(rules, condition)
+		} else {
+			outboundTag := strings.TrimSpace(rule.Outbound)
+			if outboundTag == "" || !outboundTags[outboundTag] {
+				// Never emit a dangling outbound reference: sing-box refuses to
+				// start when a route rule points at an unknown outbound.
+				continue
+			}
+			condition["action"] = "route"
+			condition["outbound"] = outboundTag
+		}
+		if splitIP && rule.MatchType == "ip_cidr" {
+			ipRules = append(ipRules, condition)
 			continue
 		}
-		outboundTag := strings.TrimSpace(rule.Outbound)
-		if outboundTag == "" || !outboundTags[outboundTag] {
-			// Never emit a dangling outbound reference: sing-box refuses to
-			// start when a route rule points at an unknown outbound.
+		if splitIP {
+			domainRules = append(domainRules, condition)
 			continue
 		}
-		condition["action"] = "route"
-		condition["outbound"] = outboundTag
 		rules = append(rules, condition)
+	}
+	if splitIP {
+		rules = append(rules, domainRules...)
+		if len(ipRules) > 0 && strings.TrimSpace(opts.ResolveStrategy) != "" {
+			rules = append(rules, map[string]any{
+				"action":   "resolve",
+				"strategy": opts.ResolveStrategy,
+			})
+		}
+		rules = append(rules, ipRules...)
+	}
+	if opts.DNS != nil && opts.Sniff {
+		sniff := map[string]any{"action": "sniff"}
+		if timeout := strings.TrimSpace(opts.SniffTimeout); timeout != "" {
+			sniff["timeout"] = timeout
+		}
+		rules = append([]map[string]any{sniff}, rules...)
 	}
 	routeOptions := map[string]any{"final": "direct"}
 	if len(rules) > 0 {
 		routeOptions["rules"] = rules
+	}
+	if opts.DNSRuleSet != nil {
+		routeOptions["rule_set"] = []map[string]any{opts.DNSRuleSet}
 	}
 	cfg := map[string]any{
 		"log": map[string]any{
@@ -143,7 +205,18 @@ func Convert(inbounds []store.InboundConfig, opts ConvertOptions) ([]byte, error
 		"outbounds": outbounds,
 		"route":     routeOptions,
 	}
+	if opts.DNS != nil {
+		cfg["dns"] = opts.DNS
+	}
 	return json.Marshal(cfg)
+}
+
+func cloneMap(in map[string]any) map[string]any {
+	out := make(map[string]any, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
 }
 
 func label(in store.InboundConfig) string {

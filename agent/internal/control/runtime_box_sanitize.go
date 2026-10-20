@@ -52,7 +52,16 @@ func sanitizeAndroidConfig(configJSON string) (string, error) {
 		}
 	}
 
-	// 2. 路由配置清理：清除 default_interface 避免触发 Netlink 接口解析错误
+	// 2. DNS 服务器同样不能绑网卡，否则 DoH 拨号失败。
+	dnsStripped, err := stripDNSServerBinds(document)
+	if err != nil {
+		return "", err
+	}
+	if dnsStripped {
+		modified = true
+	}
+
+	// 3. 路由配置清理：清除 default_interface 避免触发 Netlink 接口解析错误
 	if rawRoute, ok := document["route"]; ok {
 		var route map[string]any
 		if err := stdjson.Unmarshal(rawRoute, &route); err == nil {
