@@ -6,6 +6,7 @@ import (
 	"sync/atomic"
 
 	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-tun"
 	"github.com/sagernet/sing/common/bufio"
 	N "github.com/sagernet/sing/common/network"
 )
@@ -62,6 +63,17 @@ func (t *trafficTracker) RoutedPacketConnection(
 	return &trackedPacketConn{PacketConn: counted, t: t}
 }
 
+// RoutedFlow counts TUN/L3 flows. sing-box 1.14 added this method to
+// ConnectionTracker; proxy inbounds still use RoutedConnection.
+func (t *trafficTracker) RoutedFlow(
+	_ context.Context,
+	_ adapter.InboundContext,
+	_ adapter.Rule,
+	_ adapter.Outbound,
+) tun.FlowTracker {
+	return &trackedFlow{t: t}
+}
+
 type trackedConn struct {
 	net.Conn
 	t      *trafficTracker
@@ -92,3 +104,30 @@ func (c *trackedPacketConn) Close() error {
 func (c *trackedConn) Upstream() any { return c.Conn }
 
 func (c *trackedPacketConn) Upstream() any { return c.PacketConn }
+
+type trackedFlow struct {
+	t      *trafficTracker
+	active atomic.Bool
+}
+
+func (f *trackedFlow) AttachFlow(tun.FlowHandle) {}
+
+func (f *trackedFlow) CountForward(n int) {
+	f.t.uplink.Add(int64(n))
+}
+
+func (f *trackedFlow) CountReverse(n int) {
+	f.t.downlink.Add(int64(n))
+}
+
+func (f *trackedFlow) FlowEstablished() {
+	if f.active.CompareAndSwap(false, true) {
+		f.t.active.Add(1)
+	}
+}
+
+func (f *trackedFlow) CloseFlow(tun.FlowCloseReason) {
+	if f.active.CompareAndSwap(true, false) {
+		f.t.active.Add(-1)
+	}
+}

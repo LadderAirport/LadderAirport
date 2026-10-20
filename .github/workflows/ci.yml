@@ -130,7 +130,7 @@ jobs:
           BUILD_TIME: ${{ steps.ver.outputs.built_at }}
           SINGBOX_VERSION: ${{ steps.ver.outputs.singbox_version }}
         run: |
-          AGENT_LDFLAGS="-X github.com/sagernet/sing-box/constant.Version=${SINGBOX_VERSION}"
+          AGENT_LDFLAGS="-checklinkname=0 -X github.com/sagernet/sing-box/constant.Version=${SINGBOX_VERSION}"
           AGENT_LDFLAGS+=" -X github.com/ladderairport/agent/internal/version.Version=${VERSION}"
           AGENT_LDFLAGS+=" -X github.com/ladderairport/agent/internal/version.Commit=${GIT_COMMIT}"
           AGENT_LDFLAGS+=" -X github.com/ladderairport/agent/internal/version.BuiltAt=${BUILD_TIME}"

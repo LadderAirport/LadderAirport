@@ -119,8 +119,8 @@ export function NodeDNSTab({ node, onSaved, onDirtyChange }: NodeDNSTabProps) {
         <div className="space-y-1">
           <h3 className="text-sm font-semibold text-foreground">DNS</h3>
           <p className="text-xs text-muted-foreground">
-            这台 Agent 的 sing-box DNS。每行只有名称和 URL。第一行是 final：节点上的查询和代理链下一跳主机名都只走它。
-            sing-box 1.12 没有故障转移，也没有健康检查，所以不会自动改用后面的行。后面的行会写进配置，但不会接到查询；要换上游，把它移到第一行。
+            这台 Agent 的 sing-box DNS。每行只有名称和 URL。第一行是优先上游，代理链下一跳主机名也只走它。
+            核心不低于 1.14 时，节点查询会按顺序往下试：超时、失败或没有地址才用下一行，NXDOMAIN 不再往下试。1.12 只查询第一行，后面的行写进配置但不会接到查询。
             保存后于下次下发生效。
           </p>
         </div>
@@ -141,7 +141,7 @@ export function NodeDNSTab({ node, onSaved, onDirtyChange }: NodeDNSTabProps) {
       )}
       {dnsGate === 'unknown' && (
         <p className="text-xs text-muted-foreground">
-          这台 Agent 还没上报 sing-box 版本。Panel 在确认不低于 1.12 之前不会下发这段 DNS。已升级的 Agent 会在配置里没有 dns 时自行补上同一组默认 DoH，并把第一行当作 final。
+          这台 Agent 还没上报 sing-box 版本。Panel 在确认不低于 1.12 之前不会下发这段 DNS。已升级到 1.14 的 Agent 会在配置里没有 dns 时自行补上同一组默认 DoH，并按顺序故障转移。
         </p>
       )}
       {androidNode && (

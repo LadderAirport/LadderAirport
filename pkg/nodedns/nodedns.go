@@ -19,8 +19,8 @@ import (
 const (
 	// NameAli is the first default row, so it is dns.final unless reordered.
 	NameAli = "doh-ali"
-	// NameDNSPod is the second default row. sing-box 1.12 does not query it
-	// while a row above it exists.
+	// NameDNSPod is the second default row. sing-box 1.12 does not query it.
+	// sing-box 1.14 tries it when the row above fails.
 	NameDNSPod = "doh-dnspod"
 	// NameCloudflare is the third default row.
 	NameCloudflare = "doh-cf"
@@ -40,11 +40,14 @@ const (
 	defaultCache        = 2048
 	defaultSniffTimeout = "300ms"
 	maxServers          = 32
+	// failoverQueryTimeout is the per-attempt budget. A dead server must fail
+	// this fast so the next row is tried. Four rows can therefore take 8s.
+	failoverQueryTimeout = "2s"
 )
 
 // Server is one row in the ordered DNS list stored in nodes.dns_json.
-// The first row is sing-box dns.final. Later rows are emitted but not queried,
-// because sing-box 1.12 has no DNS failover.
+// On sing-box 1.12 the first row is dns.final and later rows are not queried.
+// On 1.14, EmitOptions.Failover tries the rows in order.
 type Server struct {
 	Name string `json:"name"`
 	URL  string `json:"url"`
@@ -75,6 +78,9 @@ type EmitOptions struct {
 	BindInterface string
 	// SkipBind drops BindInterface. Android nodes cannot honor a chosen NIC.
 	SkipBind bool
+	// Failover emits sing-box 1.14 DNS rules that try user rows in order.
+	// Leave it false for agents older than 1.14: those cores only query final.
+	Failover bool
 }
 
 // EmitResult is the pieces a sing-box 1.12 config needs for this DNS setting.
@@ -143,11 +149,30 @@ func Parse(raw string) (Config, error) {
 // the typed DNS block, route resolve action, and domain_resolver object.
 // Empty or unparseable versions return false so older agents keep their old JSON.
 func SupportsSchema(singboxVersion string) bool {
+	return atLeast(singboxVersion, 1, 12)
+}
+
+// DropsInboundSniffFields reports that inbound sniff, sniff_override_destination,
+// and sniff_timeout were removed. sing-box 1.13 rejects the config when they
+// are present. The route sniff action is the replacement.
+// sniff_override_destination has no replacement: domain rules still match the
+// sniffed name, and the dialed destination stays the original address.
+func DropsInboundSniffFields(singboxVersion string) bool {
+	return atLeast(singboxVersion, 1, 13)
+}
+
+// SupportsFailover reports that the node can run the 1.14 evaluate / respond
+// DNS rules. Older 1.12 cores keep a single final server.
+func SupportsFailover(singboxVersion string) bool {
+	return atLeast(singboxVersion, 1, 14)
+}
+
+func atLeast(singboxVersion string, major, minor int) bool {
 	parsed := semver.Parse(singboxVersion)
 	if !parsed.Valid {
 		return false
 	}
-	minimum := semver.V{Major: 1, Minor: 12, Valid: true}
+	minimum := semver.V{Major: major, Minor: minor, Valid: true}
 	return semver.Compare(parsed, minimum) >= 0
 }
 
@@ -232,6 +257,12 @@ func (c Config) Emit(opts EmitOptions) (EmitResult, error) {
 		dialed = append(dialed, parsed)
 	}
 	final := dialed[0].Name
+	if opts.Failover && len(dialed) > 1 {
+		// The last user row is the raw fallback. Earlier rows are tried by
+		// evaluate rules and accepted only on NXDOMAIN or a response that
+		// contains an address. The injected system resolver is not a user row.
+		final = dialed[len(dialed)-1].Name
+	}
 	bootstrap := firstIPName(dialed)
 	useSystem := false
 	for _, server := range dialed {
@@ -282,12 +313,21 @@ func (c Config) Emit(opts EmitOptions) (EmitResult, error) {
 		servers = append(servers, local)
 	}
 	dns := map[string]any{
-		"servers":           servers,
-		"final":             final,
-		"strategy":          c.Strategy,
-		"independent_cache": c.IndependentCache,
-		"cache_capacity":    c.CacheCapacity,
-		"reverse_mapping":   c.ReverseMapping,
+		"servers":         servers,
+		"final":           final,
+		"strategy":        c.Strategy,
+		"cache_capacity":  c.CacheCapacity,
+		"reverse_mapping": c.ReverseMapping,
+	}
+	if opts.Failover {
+		if rules := failoverRules(dialed); len(rules) > 0 {
+			dns["rules"] = rules
+			dns["timeout"] = failoverQueryTimeout
+		}
+		// independent_cache is deprecated in 1.14 and removed from the schema.
+		// Evaluate rules disable the cache per attempt so a failure is not reused.
+	} else {
+		dns["independent_cache"] = c.IndependentCache
 	}
 	if c.DisableCache {
 		dns["disable_cache"] = true
@@ -298,13 +338,52 @@ func (c Config) Emit(opts EmitOptions) (EmitResult, error) {
 	if c.ClientSubnet != "" {
 		dns["client_subnet"] = c.ClientSubnet
 	}
+	chain := map[string]any{
+		// Next-hop dialing pins one server. sing-box 1.14 skips DNS rules when
+		// domain_resolver.server is set, and refuses to start without it once
+		// more than one DNS server exists. The pin stays the first row.
+		"server":   dialed[0].Name,
+		"strategy": StrategyIPv4Only,
+	}
+	if opts.Failover {
+		chain["timeout"] = failoverQueryTimeout
+	}
 	return EmitResult{
-		DNS: dns,
-		ChainResolver: map[string]any{
-			"server":   final,
-			"strategy": StrategyIPv4Only,
-		},
+		DNS:           dns,
+		ChainResolver: chain,
 	}, nil
+}
+
+// failoverRules tries each user row except the last. A transport error, timeout,
+// SERVFAIL, or NOERROR with no address does not match, so the walk continues.
+// NXDOMAIN is returned as-is. The last row is dns.final and is queried only
+// when every earlier row was rejected.
+func failoverRules(servers []dialServer) []map[string]any {
+	if len(servers) < 2 {
+		return nil
+	}
+	rules := make([]map[string]any, 0, (len(servers)-1)*3)
+	for _, server := range servers[:len(servers)-1] {
+		rules = append(rules,
+			map[string]any{
+				"action":        "evaluate",
+				"server":        server.Name,
+				"timeout":       failoverQueryTimeout,
+				"disable_cache": true,
+			},
+			map[string]any{
+				"match_response": true,
+				"response_rcode": "NXDOMAIN",
+				"action":         "respond",
+			},
+			map[string]any{
+				"match_response": true,
+				"ip_accept_any":  true,
+				"action":         "respond",
+			},
+		)
+	}
+	return rules
 }
 
 type storedConfig struct {

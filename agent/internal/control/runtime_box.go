@@ -27,7 +27,7 @@ func SingboxVersion() string {
 	if constant.Version != "" && constant.Version != "unknown" {
 		return constant.Version
 	}
-	return "1.12.22"
+	return "1.14.3"
 }
 
 // BoxRuntime drives a single in-process sing-box instance (二开 adapter).
@@ -368,11 +368,64 @@ func (r *BoxRuntime) parseOptions(configJSON string) (option.Options, error) {
 // prepareConfigJSON applies platform-neutral and platform-specific rewrites
 // before parse/start. Safe to call on already-prepared JSON (idempotent).
 func prepareConfigJSON(configJSON string) (string, error) {
-	configJSON, err := ensureDefaultDNS(configJSON)
+	configJSON, err := stripRemovedInboundFields(configJSON)
+	if err != nil {
+		return "", err
+	}
+	configJSON, err = ensureDefaultDNS(configJSON)
 	if err != nil {
 		return "", err
 	}
 	return sanitizePlatformConfig(configJSON)
+}
+
+// removedInboundFields are rejected at parse time since sing-box 1.13.
+// A config generated for 1.12 still carries them. Dropping the fields lets
+// this 1.14 process start. The route sniff action, when present, still sniffs.
+// sniff_override_destination has no replacement.
+var removedInboundFields = []string{
+	"sniff",
+	"sniff_override_destination",
+	"sniff_timeout",
+	"domain_strategy",
+	"udp_disable_domain_unmapping",
+}
+
+func stripRemovedInboundFields(configJSON string) (string, error) {
+	var document map[string]stdjson.RawMessage
+	if err := stdjson.Unmarshal([]byte(configJSON), &document); err != nil {
+		return "", fmt.Errorf("解析节点配置失败：%w", err)
+	}
+	raw, ok := document["inbounds"]
+	if !ok {
+		return configJSON, nil
+	}
+	var inbounds []map[string]any
+	if err := stdjson.Unmarshal(raw, &inbounds); err != nil {
+		return "", fmt.Errorf("解析入站配置失败：%w", err)
+	}
+	removed := false
+	for _, inbound := range inbounds {
+		for _, key := range removedInboundFields {
+			if _, exists := inbound[key]; exists {
+				delete(inbound, key)
+				removed = true
+			}
+		}
+	}
+	if !removed {
+		return configJSON, nil
+	}
+	data, err := stdjson.Marshal(inbounds)
+	if err != nil {
+		return "", fmt.Errorf("编码入站配置失败：%w", err)
+	}
+	document["inbounds"] = data
+	updated, err := stdjson.Marshal(document)
+	if err != nil {
+		return "", fmt.Errorf("编码节点配置失败：%w", err)
+	}
+	return string(updated), nil
 }
 
 func ensureDefaultDNS(configJSON string) (string, error) {
@@ -393,7 +446,12 @@ func ensureDefaultDNS(configJSON string) (string, error) {
 	if !needsDefault {
 		return configJSON, nil
 	}
-	emitted, err := nodedns.Default().Emit(nodedns.EmitOptions{BindInterface: directBindInterface(document)})
+	emitted, err := nodedns.Default().Emit(nodedns.EmitOptions{
+		BindInterface: directBindInterface(document),
+		// This binary is sing-box 1.14. A config with no dns block gets the
+		// ordered failover rules. Panel still gates older agents itself.
+		Failover: true,
+	})
 	if err != nil {
 		return "", fmt.Errorf("编码默认 DNS 失败：%w", err)
 	}
