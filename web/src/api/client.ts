@@ -687,11 +687,13 @@ export interface NodeDNSServer {
   type?: string
   server: string
   server_port: number
-  path: string
-  server_name: string
+  path?: string
+  server_name?: string
+  /** Missing means enabled. Older saved rows omit this field. */
+  enabled?: boolean
 }
 
-/** Per-node DNS. Tags are fixed roles; only the dial fields are editable. */
+/** Per-node DNS. Server order is the list order; the first enabled row is final. */
 export interface NodeDNS {
   strategy: string
   sniff: boolean
@@ -706,7 +708,7 @@ export interface NodeDNS {
   servers: NodeDNSServer[]
 }
 
-/** Matches pkg/nodedns.Default. Used when an older payload omits dns. */
+/** Matches pkg/nodedns.Default. The first enabled row is final. */
 export const DEFAULT_NODE_DNS: NodeDNS = {
   strategy: 'prefer_ipv4',
   sniff: true,
@@ -719,10 +721,10 @@ export const DEFAULT_NODE_DNS: NodeDNS = {
   disable_cache: false,
   client_subnet: '',
   servers: [
-    { tag: 'doh-ali', type: 'https', server: '223.5.5.5', server_port: 443, path: '/dns-query', server_name: 'dns.alidns.com' },
-    { tag: 'doh-dnspod', type: 'https', server: '1.12.12.12', server_port: 443, path: '/dns-query', server_name: 'doh.pub' },
-    { tag: 'doh-cf', type: 'https', server: '1.1.1.1', server_port: 443, path: '/dns-query', server_name: 'cloudflare-dns.com' },
-    { tag: 'doh-google', type: 'https', server: '8.8.8.8', server_port: 443, path: '/dns-query', server_name: 'dns.google' },
+    { tag: 'doh-ali', type: 'https', server: '223.5.5.5', server_port: 443, path: '/dns-query', server_name: 'dns.alidns.com', enabled: true },
+    { tag: 'doh-dnspod', type: 'https', server: '1.12.12.12', server_port: 443, path: '/dns-query', server_name: 'doh.pub', enabled: true },
+    { tag: 'doh-cf', type: 'https', server: '1.1.1.1', server_port: 443, path: '/dns-query', server_name: 'cloudflare-dns.com', enabled: true },
+    { tag: 'doh-google', type: 'https', server: '8.8.8.8', server_port: 443, path: '/dns-query', server_name: 'dns.google', enabled: true },
   ],
 }
 

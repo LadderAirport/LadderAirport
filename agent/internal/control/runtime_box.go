@@ -402,8 +402,10 @@ func ensureDefaultDNS(configJSON string) (string, error) {
 		return "", fmt.Errorf("编码默认 DNS 失败：%w", err)
 	}
 	document["dns"] = data
-	if err := mergeGeositeRuleSet(document, emitted.RuleSet); err != nil {
-		return "", err
+	if emitted.RuleSet != nil {
+		if err := mergeRuleSet(document, emitted.RuleSet); err != nil {
+			return "", err
+		}
 	}
 	if err := ensureChainDomainResolvers(document, emitted.ChainResolver); err != nil {
 		return "", err
@@ -434,7 +436,8 @@ func directBindInterface(document map[string]stdjson.RawMessage) string {
 	return ""
 }
 
-func mergeGeositeRuleSet(document map[string]stdjson.RawMessage, ruleSet map[string]any) error {
+func mergeRuleSet(document map[string]stdjson.RawMessage, ruleSet map[string]any) error {
+	tag, _ := ruleSet["tag"].(string)
 	route := map[string]any{}
 	if raw, ok := document["route"]; ok {
 		if err := stdjson.Unmarshal(raw, &route); err != nil {
@@ -444,7 +447,7 @@ func mergeGeositeRuleSet(document map[string]stdjson.RawMessage, ruleSet map[str
 	if sets, ok := route["rule_set"].([]any); ok {
 		for _, item := range sets {
 			entry, _ := item.(map[string]any)
-			if entry["tag"] == nodedns.RuleSetGeositeCN {
+			if tag != "" && entry["tag"] == tag {
 				return nil
 			}
 		}

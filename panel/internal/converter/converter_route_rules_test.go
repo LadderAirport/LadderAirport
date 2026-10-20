@@ -110,11 +110,8 @@ func TestConvertNodeDNSBlock(t *testing.T) {
 			{MatchType: "ip_cidr", MatchValue: "203.0.113.0/24", Outbound: "direct"},
 			{MatchType: "domain_suffix", MatchValue: "example.com", Outbound: "direct"},
 		},
-		DNS: map[string]any{"final": "doh-cf"},
-		DNSRuleSet: map[string]any{
-			"type": "remote", "tag": "geosite-cn", "format": "binary",
-		},
-		ChainDomainResolver: map[string]any{"server": "doh-cf", "strategy": "ipv4_only"},
+		DNS:                 map[string]any{"final": "doh-ali"},
+		ChainDomainResolver: map[string]any{"server": "doh-ali", "strategy": "ipv4_only"},
 		Sniff:               true,
 		SniffOverride:       true,
 		SniffTimeout:        "300ms",
@@ -127,7 +124,7 @@ func TestConvertNodeDNSBlock(t *testing.T) {
 	if err := json.Unmarshal(raw, &cfg); err != nil {
 		t.Fatal(err)
 	}
-	if cfg["dns"].(map[string]any)["final"] != "doh-cf" {
+	if cfg["dns"].(map[string]any)["final"] != "doh-ali" {
 		t.Fatalf("dns = %v", cfg["dns"])
 	}
 	inbound := cfg["inbounds"].([]any)[0].(map[string]any)
@@ -143,7 +140,7 @@ func TestConvertNodeDNSBlock(t *testing.T) {
 	}
 	chain := cfg["outbounds"].([]any)[1].(map[string]any)
 	resolver := chain["domain_resolver"].(map[string]any)
-	if resolver["server"] != "doh-cf" || resolver["strategy"] != "ipv4_only" {
+	if resolver["server"] != "doh-ali" || resolver["strategy"] != "ipv4_only" {
 		t.Fatalf("chain resolver = %v", resolver)
 	}
 	rules := decodeRouteRules(t, raw)
@@ -160,14 +157,14 @@ func TestConvertNodeDNSBlock(t *testing.T) {
 		t.Fatalf("resolve = %v", rules[3])
 	}
 	if _, ok := rules[3]["server"]; ok {
-		t.Fatal("resolve must omit server so dns.rules still apply")
+		t.Fatal("resolve must omit server so the query uses dns.final")
 	}
 	if _, ok := rules[4]["ip_cidr"]; !ok {
 		t.Fatalf("ip rule = %v", rules[4])
 	}
 	route := cfg["route"].(map[string]any)
-	if route["rule_set"] == nil {
-		t.Fatal("missing geosite rule set")
+	if _, ok := route["rule_set"]; ok {
+		t.Fatalf("node DNS must not add a rule set: %v", route["rule_set"])
 	}
 }
 

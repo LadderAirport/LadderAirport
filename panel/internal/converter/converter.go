@@ -30,7 +30,7 @@ type ConvertOptions struct {
 	// DNS is the sing-box 1.12 dns object. Nil keeps the legacy config with
 	// no dns block, so agents older than 1.12 receive unchanged JSON.
 	DNS map[string]any
-	// DNSRuleSet is appended to route.rule_set when DNS is set (geosite-cn).
+	// DNSRuleSet is appended to route.rule_set when set. Node DNS does not emit one.
 	DNSRuleSet map[string]any
 	// ChainDomainResolver is copied onto chain outbounds (not direct) so the
 	// next-hop hostname resolves without detouring through the chain itself.

@@ -2,7 +2,7 @@ package nodedns
 
 import "testing"
 
-func TestDefaultEmitPartitionsQueries(t *testing.T) {
+func TestDefaultEmitUsesFirstEnabledAsFinal(t *testing.T) {
 	if !SupportsSchema("1.12.22") || !SupportsSchema("v1.13.0") {
 		t.Fatal("1.12+ should support the schema")
 	}
@@ -41,17 +41,16 @@ func TestDefaultEmitPartitionsQueries(t *testing.T) {
 			t.Fatalf("IP server must not need a bootstrap resolver: %#v", servers[i])
 		}
 	}
-	if emitted.DNS["final"] != TagCloudflare || emitted.DNS["strategy"] != StrategyPreferIPv4 {
+	if emitted.DNS["final"] != TagAli || emitted.DNS["strategy"] != StrategyPreferIPv4 {
 		t.Fatalf("dns = %#v", emitted.DNS)
 	}
-	rules, _ := emitted.DNS["rules"].([]map[string]any)
-	if len(rules) != 3 || rules[0]["server"] != TagDNSPod || rules[1]["server"] != TagAli || rules[2]["server"] != TagGoogle {
-		t.Fatalf("rules = %#v", rules)
+	if _, ok := emitted.DNS["rules"]; ok {
+		t.Fatalf("dns rules must not split queries: %#v", emitted.DNS["rules"])
 	}
-	if emitted.RuleSet["tag"] != RuleSetGeositeCN || emitted.RuleSet["download_detour"] != "direct" {
+	if emitted.RuleSet != nil {
 		t.Fatalf("rule set = %#v", emitted.RuleSet)
 	}
-	if emitted.ChainResolver["server"] != TagCloudflare || emitted.ChainResolver["strategy"] != StrategyIPv4Only {
+	if emitted.ChainResolver["server"] != TagAli || emitted.ChainResolver["strategy"] != StrategyIPv4Only {
 		t.Fatalf("chain resolver = %#v", emitted.ChainResolver)
 	}
 	skipped, err := cfg.Emit(EmitOptions{BindInterface: "eth0", SkipBind: true})
@@ -90,8 +89,8 @@ func TestNormalizeHostnameUsesIPBootstrap(t *testing.T) {
 	}
 	servers := emitted.DNS["servers"].([]map[string]any)
 	resolver, _ := servers[2]["domain_resolver"].(map[string]any)
-	if resolver["server"] != TagGoogle {
-		t.Fatalf("bootstrap = %#v, want %s (Cloudflare itself is a hostname)", resolver, TagGoogle)
+	if resolver["server"] != TagAli {
+		t.Fatalf("bootstrap = %#v, want %s (first enabled IP)", resolver, TagAli)
 	}
 	if emitted.DNS["client_subnet"] != "203.0.113.8/32" {
 		t.Fatalf("emitted subnet = %#v", emitted.DNS["client_subnet"])
@@ -112,8 +111,73 @@ func TestNormalizeRejectsUnusableConfig(t *testing.T) {
 		t.Fatal("expected client_subnet error")
 	}
 	cfg = Default()
-	cfg.Servers = cfg.Servers[:3]
+	off := false
+	for i := range cfg.Servers {
+		cfg.Servers[i].Enabled = &off
+	}
 	if err := cfg.Normalize(); err == nil {
-		t.Fatal("expected missing tag error")
+		t.Fatal("expected an enabled final server")
+	}
+	cfg = Default()
+	cfg.Servers[0].Tag = "bad tag"
+	if err := cfg.Normalize(); err == nil {
+		t.Fatal("expected tag error")
+	}
+}
+
+func TestLegacyJSONKeepsOrderAndEnablesRows(t *testing.T) {
+	raw := `{
+		"strategy":"prefer_ipv4","sniff":true,"sniff_override_destination":true,"sniff_timeout":"300ms",
+		"independent_cache":true,"cache_capacity":2048,"reverse_mapping":true,
+		"servers":[
+			{"tag":"doh-cf","type":"https","server":"1.1.1.1","server_port":443,"path":"/dns-query","server_name":"cloudflare-dns.com"},
+			{"tag":"doh-ali","type":"https","server":"223.5.5.5","server_port":443,"path":"/dns-query","server_name":"dns.alidns.com"}
+		]
+	}`
+	cfg, err := Parse(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Servers[0].Tag != TagCloudflare || !serverEnabled(cfg.Servers[0]) || cfg.Servers[1].Tag != TagAli {
+		t.Fatalf("migrated = %+v", cfg.Servers)
+	}
+	emitted, err := cfg.Emit(EmitOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if emitted.DNS["final"] != TagCloudflare || emitted.ChainResolver["server"] != TagCloudflare {
+		t.Fatalf("final = %#v chain = %#v", emitted.DNS["final"], emitted.ChainResolver)
+	}
+}
+
+func TestReorderAndDisableSelectFinal(t *testing.T) {
+	cfg := Default()
+	cfg.Servers[0], cfg.Servers[2] = cfg.Servers[2], cfg.Servers[0]
+	off := false
+	cfg.Servers[0].Enabled = &off
+	if err := cfg.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	emitted, err := cfg.Emit(EmitOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	servers := emitted.DNS["servers"].([]map[string]any)
+	if len(servers) != 3 || emitted.DNS["final"] != TagDNSPod || emitted.ChainResolver["server"] != TagDNSPod {
+		t.Fatalf("servers=%#v final=%v chain=%v", servers, emitted.DNS["final"], emitted.ChainResolver)
+	}
+	udp := enabledServer("plain", "udp", "9.9.9.9", 53, "", "")
+	cfg.Servers = append(cfg.Servers, udp)
+	emitted, err = cfg.Emit(EmitOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	servers = emitted.DNS["servers"].([]map[string]any)
+	last := servers[len(servers)-1]
+	if last["type"] != "udp" || last["server_port"] != 53 {
+		t.Fatalf("udp = %#v", last)
+	}
+	if _, ok := last["tls"]; ok {
+		t.Fatalf("udp must not emit tls: %#v", last)
 	}
 }

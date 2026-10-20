@@ -15,19 +15,16 @@ import (
 )
 
 const (
-	// TagAli serves geosite-cn names that are not the .cn TLD (for example baidu.com).
+	// TagAli is the first default row, so it is dns.final unless the operator
+	// reorders the list. It is not a domestic-only server.
 	TagAli = "doh-ali"
-	// TagDNSPod serves domain suffix cn. It is matched before geosite-cn.
+	// TagDNSPod is the second default row. sing-box 1.12 does not query it
+	// while a server above it is enabled.
 	TagDNSPod = "doh-dnspod"
-	// TagCloudflare is dns.final (non-CN queries other than AAAA/HTTPS) and the
-	// chain-outbound domain_resolver.
+	// TagCloudflare is the third default row.
 	TagCloudflare = "doh-cf"
-	// TagGoogle serves non-CN AAAA and HTTPS queries. sing-box 1.12 has no DNS
-	// failover, so this tag is a query partition, not a backup for Cloudflare.
+	// TagGoogle is the fourth default row.
 	TagGoogle = "doh-google"
-
-	RuleSetGeositeCN = "geosite-cn"
-	GeositeCNURL     = "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-cn.srs"
 
 	StrategyPreferIPv4 = "prefer_ipv4"
 	StrategyPreferIPv6 = "prefer_ipv6"
@@ -35,20 +32,23 @@ const (
 	StrategyIPv6Only   = "ipv6_only"
 
 	defaultPath         = "/dns-query"
-	defaultPort         = 443
 	defaultCache        = 2048
 	defaultSniffTimeout = "300ms"
+	maxServers          = 32
 )
 
-// Server is one editable DoH upstream. Tag and Type are fixed; the operator
-// edits the dial address, port, path, and TLS server name.
+// Server is one row in the ordered DNS list. The first enabled row is
+// sing-box dns.final. Later enabled rows are emitted but not queried, because
+// sing-box 1.12 has no DNS failover. A missing Enabled value is treated as
+// enabled so older dns_json rows keep working.
 type Server struct {
 	Tag        string `json:"tag"`
 	Type       string `json:"type"`
 	Server     string `json:"server"`
 	ServerPort int    `json:"server_port"`
-	Path       string `json:"path"`
-	ServerName string `json:"server_name"`
+	Path       string `json:"path,omitempty"`
+	ServerName string `json:"server_name,omitempty"`
+	Enabled    *bool  `json:"enabled,omitempty"`
 }
 
 // Config is the per-node DNS setting stored in nodes.dns_json and returned by
@@ -78,13 +78,16 @@ type EmitOptions struct {
 }
 
 // EmitResult is the pieces a sing-box 1.12 config needs for this DNS setting.
+// RuleSet is unused: DNS is not split by domain, so nothing downloads geosite.
 type EmitResult struct {
 	DNS           map[string]any
 	RuleSet       map[string]any
 	ChainResolver map[string]any
 }
 
-// Default is the prefilled DoH set: two domestic and two overseas.
+// Default is the prefilled DoH list. Row order is the list order: the first
+// enabled row (AliDNS) is final. The other three stay in the list so they can
+// be reordered, but 1.12 does not send queries to them.
 // Addresses are IPv4 literals verified against the provider certificate, so
 // dialing them needs no bootstrap lookup and works with bind_interface.
 func Default() Config {
@@ -97,10 +100,10 @@ func Default() Config {
 		CacheCapacity:    defaultCache,
 		ReverseMapping:   true,
 		Servers: []Server{
-			{Tag: TagAli, Type: "https", Server: "223.5.5.5", ServerPort: defaultPort, Path: defaultPath, ServerName: "dns.alidns.com"},
-			{Tag: TagDNSPod, Type: "https", Server: "1.12.12.12", ServerPort: defaultPort, Path: defaultPath, ServerName: "doh.pub"},
-			{Tag: TagCloudflare, Type: "https", Server: "1.1.1.1", ServerPort: defaultPort, Path: defaultPath, ServerName: "cloudflare-dns.com"},
-			{Tag: TagGoogle, Type: "https", Server: "8.8.8.8", ServerPort: defaultPort, Path: defaultPath, ServerName: "dns.google"},
+			enabledServer(TagAli, "https", "223.5.5.5", 443, defaultPath, "dns.alidns.com"),
+			enabledServer(TagDNSPod, "https", "1.12.12.12", 443, defaultPath, "doh.pub"),
+			enabledServer(TagCloudflare, "https", "1.1.1.1", 443, defaultPath, "cloudflare-dns.com"),
+			enabledServer(TagGoogle, "https", "8.8.8.8", 443, defaultPath, "dns.google"),
 		},
 	}
 }
@@ -171,37 +174,37 @@ func (c *Config) Normalize() error {
 	}
 	c.ClientSubnet = subnet
 
-	if len(c.Servers) != 4 {
-		return fmt.Errorf("必须提供 4 个 DNS 服务器（%s、%s、%s、%s）", TagAli, TagDNSPod, TagCloudflare, TagGoogle)
+	if len(c.Servers) > maxServers {
+		return fmt.Errorf("DNS 服务器不能超过 %d 台", maxServers)
 	}
-	byTag := make(map[string]Server, 4)
-	for _, server := range c.Servers {
-		normalized, err := normalizeServer(server)
+	seen := make(map[string]struct{}, len(c.Servers))
+	enabled := make([]Server, 0, len(c.Servers))
+	for i := range c.Servers {
+		normalized, err := normalizeServer(c.Servers[i])
 		if err != nil {
 			return err
 		}
-		if _, exists := byTag[normalized.Tag]; exists {
+		if _, exists := seen[normalized.Tag]; exists {
 			return fmt.Errorf("DNS 服务器标签 %q 重复", normalized.Tag)
 		}
-		byTag[normalized.Tag] = normalized
-	}
-	ordered := make([]Server, 0, 4)
-	for _, tag := range []string{TagAli, TagDNSPod, TagCloudflare, TagGoogle} {
-		server, ok := byTag[tag]
-		if !ok {
-			return fmt.Errorf("缺少 DNS 服务器 %s", tag)
+		seen[normalized.Tag] = struct{}{}
+		c.Servers[i] = normalized
+		if serverEnabled(normalized) {
+			enabled = append(enabled, normalized)
 		}
-		ordered = append(ordered, server)
 	}
-	if bootstrapTag(ordered) == "" {
-		return fmt.Errorf("至少有一个 DNS 服务器必须是 IP，用来引导 DoH 域名")
+	if len(enabled) == 0 {
+		return fmt.Errorf("至少启用一台 DNS 服务器作为 final")
 	}
-	c.Servers = ordered
+	if err := requireBootstrap(enabled); err != nil {
+		return err
+	}
 	return nil
 }
 
-// Emit builds the sing-box dns object, the geosite-cn rule set, and the
-// domain_resolver attached to chain outbounds.
+// Emit builds the sing-box dns object and the domain_resolver attached to
+// chain outbounds. There are no domain or query-type DNS rules. final and the
+// chain resolver are the first enabled server.
 func (c Config) Emit(opts EmitOptions) (EmitResult, error) {
 	if err := c.Normalize(); err != nil {
 		return EmitResult{}, err
@@ -210,19 +213,25 @@ func (c Config) Emit(opts EmitOptions) (EmitResult, error) {
 	if opts.SkipBind {
 		bind = ""
 	}
-	bootstrap := bootstrapTag(c.Servers)
-	servers := make([]map[string]any, 0, len(c.Servers))
-	for _, server := range c.Servers {
+	enabled := enabledServers(c.Servers)
+	final := enabled[0].Tag
+	bootstrap := bootstrapTag(enabled)
+	servers := make([]map[string]any, 0, len(enabled))
+	for _, server := range enabled {
 		item := map[string]any{
-			"type":        "https",
+			"type":        server.Type,
 			"tag":         server.Tag,
 			"server":      server.Server,
 			"server_port": server.ServerPort,
-			"path":        server.Path,
-			"tls": map[string]any{
+		}
+		if serverUsesPath(server.Type) {
+			item["path"] = server.Path
+		}
+		if serverUsesTLS(server.Type) {
+			item["tls"] = map[string]any{
 				"enabled":     true,
 				"server_name": server.ServerName,
-			},
+			}
 		}
 		if bind != "" {
 			item["bind_interface"] = bind
@@ -236,13 +245,8 @@ func (c Config) Emit(opts EmitOptions) (EmitResult, error) {
 		servers = append(servers, item)
 	}
 	dns := map[string]any{
-		"servers": servers,
-		"rules": []map[string]any{
-			{"domain_suffix": []string{"cn"}, "action": "route", "server": TagDNSPod},
-			{"rule_set": []string{RuleSetGeositeCN}, "action": "route", "server": TagAli},
-			{"query_type": []string{"AAAA", "HTTPS"}, "action": "route", "server": TagGoogle},
-		},
-		"final":             TagCloudflare,
+		"servers":           servers,
+		"final":             final,
 		"strategy":          c.Strategy,
 		"independent_cache": c.IndependentCache,
 		"cache_capacity":    c.CacheCapacity,
@@ -259,15 +263,8 @@ func (c Config) Emit(opts EmitOptions) (EmitResult, error) {
 	}
 	return EmitResult{
 		DNS: dns,
-		RuleSet: map[string]any{
-			"type":            "remote",
-			"tag":             RuleSetGeositeCN,
-			"format":          "binary",
-			"url":             GeositeCNURL,
-			"download_detour": "direct",
-		},
 		ChainResolver: map[string]any{
-			"server":   TagCloudflare,
+			"server":   final,
 			"strategy": StrategyIPv4Only,
 		},
 	}, nil
@@ -275,39 +272,47 @@ func (c Config) Emit(opts EmitOptions) (EmitResult, error) {
 
 func normalizeServer(server Server) (Server, error) {
 	server.Tag = strings.TrimSpace(server.Tag)
-	switch server.Tag {
-	case TagAli, TagDNSPod, TagCloudflare, TagGoogle:
-	default:
+	if !validTag(server.Tag) {
 		return Server{}, fmt.Errorf("DNS 服务器标签 %q 无效", server.Tag)
 	}
-	server.Type = strings.TrimSpace(server.Type)
+	server.Type = strings.ToLower(strings.TrimSpace(server.Type))
 	if server.Type == "" {
 		server.Type = "https"
 	}
-	if server.Type != "https" {
-		return Server{}, fmt.Errorf("%s 的类型必须是 https", server.Tag)
+	if !validType(server.Type) {
+		return Server{}, fmt.Errorf("%s 的类型 %q 无效", server.Tag, server.Type)
 	}
-	server.Server = strings.TrimSpace(server.Server)
-	if server.Server == "" || strings.ContainsAny(server.Server, " \t/") {
+	server.Server = strings.Trim(strings.TrimSpace(server.Server), "[]")
+	if server.Server == "" || strings.ContainsAny(server.Server, " \t/\\") || strings.Contains(server.Server, "://") {
 		return Server{}, fmt.Errorf("%s 的 server 无效", server.Tag)
 	}
 	if server.ServerPort == 0 {
-		server.ServerPort = defaultPort
+		server.ServerPort = defaultPort(server.Type)
 	}
 	if server.ServerPort < 1 || server.ServerPort > 65535 {
 		return Server{}, fmt.Errorf("%s 的端口超出有效范围", server.Tag)
 	}
-	server.Path = strings.TrimSpace(server.Path)
-	if server.Path == "" {
-		server.Path = defaultPath
+	if serverUsesPath(server.Type) {
+		server.Path = strings.TrimSpace(server.Path)
+		if server.Path == "" {
+			server.Path = defaultPath
+		}
+		if !strings.HasPrefix(server.Path, "/") || strings.ContainsAny(server.Path, " \t") {
+			return Server{}, fmt.Errorf("%s 的 path 必须以 / 开头", server.Tag)
+		}
+	} else {
+		server.Path = ""
 	}
-	if !strings.HasPrefix(server.Path, "/") || strings.ContainsAny(server.Path, " \t") {
-		return Server{}, fmt.Errorf("%s 的 path 必须以 / 开头", server.Tag)
+	if serverUsesTLS(server.Type) {
+		server.ServerName = strings.TrimSpace(server.ServerName)
+		if server.ServerName == "" || strings.ContainsAny(server.ServerName, " /\\") || strings.Contains(server.ServerName, "://") {
+			return Server{}, fmt.Errorf("%s 必须提供 TLS server_name", server.Tag)
+		}
+	} else {
+		server.ServerName = ""
 	}
-	server.ServerName = strings.TrimSpace(server.ServerName)
-	if server.ServerName == "" || strings.ContainsAny(server.ServerName, " /\\") || strings.Contains(server.ServerName, "://") {
-		return Server{}, fmt.Errorf("%s 必须提供 TLS server_name", server.Tag)
-	}
+	on := serverEnabled(server)
+	server.Enabled = &on
 	return server, nil
 }
 
@@ -334,12 +339,97 @@ func normalizeClientSubnet(raw string) (string, error) {
 	return netip.PrefixFrom(addr, bits).String(), nil
 }
 
+func enabledServer(tag, kind, server string, port int, path, name string) Server {
+	on := true
+	return Server{
+		Tag: tag, Type: kind, Server: server, ServerPort: port,
+		Path: path, ServerName: name, Enabled: &on,
+	}
+}
+
+func serverEnabled(server Server) bool {
+	return server.Enabled == nil || *server.Enabled
+}
+
+func enabledServers(servers []Server) []Server {
+	out := make([]Server, 0, len(servers))
+	for _, server := range servers {
+		if serverEnabled(server) {
+			out = append(out, server)
+		}
+	}
+	return out
+}
+
+func validTag(tag string) bool {
+	if tag == "" || len(tag) > 32 {
+		return false
+	}
+	for i, r := range tag {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case (r == '-' || r == '_') && i > 0:
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func validType(kind string) bool {
+	switch kind {
+	case "udp", "tcp", "tls", "https", "quic", "h3":
+		return true
+	default:
+		return false
+	}
+}
+
+func serverUsesTLS(kind string) bool {
+	switch kind {
+	case "tls", "https", "quic", "h3":
+		return true
+	default:
+		return false
+	}
+}
+
+func serverUsesPath(kind string) bool {
+	return kind == "https" || kind == "h3"
+}
+
+func defaultPort(kind string) int {
+	switch kind {
+	case "udp", "tcp":
+		return 53
+	case "tls", "quic":
+		return 853
+	default:
+		return 443
+	}
+}
+
+func requireBootstrap(enabled []Server) error {
+	needsBootstrap := false
+	for _, server := range enabled {
+		if !isIPAddress(server.Server) {
+			needsBootstrap = true
+			break
+		}
+	}
+	if !needsBootstrap {
+		return nil
+	}
+	if bootstrapTag(enabled) == "" {
+		return fmt.Errorf("使用主机名的 DNS 服务器需要另一台启用的 IP 服务器做引导")
+	}
+	return nil
+}
+
 func bootstrapTag(servers []Server) string {
-	for _, tag := range []string{TagCloudflare, TagGoogle, TagAli, TagDNSPod} {
-		for _, server := range servers {
-			if server.Tag == tag && isIPAddress(server.Server) {
-				return tag
-			}
+	for _, server := range servers {
+		if serverEnabled(server) && isIPAddress(server.Server) {
+			return server.Tag
 		}
 	}
 	return ""

@@ -73,11 +73,11 @@ func TestEnsureDefaultDNS(t *testing.T) {
 	if opts1.DNS == nil || len(opts1.DNS.Servers) == 0 {
 		t.Fatalf("expected default DNS servers to be injected, got %#v", opts1.DNS)
 	}
-	if opts1.DNS.Servers[0].Tag != "doh-ali" || opts1.DNS.Final != "doh-cf" {
+	if opts1.DNS.Servers[0].Tag != "doh-ali" || opts1.DNS.Final != "doh-ali" {
 		t.Fatalf("expected DoH defaults, got tag %s final %s", opts1.DNS.Servers[0].Tag, opts1.DNS.Final)
 	}
-	if opts1.Route == nil || len(opts1.Route.RuleSet) != 1 || opts1.Route.RuleSet[0].Tag != "geosite-cn" {
-		t.Fatalf("expected geosite-cn rule set, got %#v", opts1.Route)
+	if opts1.Route != nil && len(opts1.Route.RuleSet) != 0 {
+		t.Fatalf("default DNS must not add a rule set, got %#v", opts1.Route.RuleSet)
 	}
 
 	// Case 2: existing custom dns block is preserved
@@ -137,7 +137,7 @@ func TestEnsureDefaultDNSBindsAndResolvesNextHop(t *testing.T) {
 	}
 	outbounds := document["outbounds"].([]any)
 	resolver, _ := outbounds[1].(map[string]any)["domain_resolver"].(map[string]any)
-	if resolver["server"] != "doh-cf" || resolver["strategy"] != "ipv4_only" {
+	if resolver["server"] != "doh-ali" || resolver["strategy"] != "ipv4_only" {
 		t.Fatalf("domain_resolver = %#v", outbounds[1])
 	}
 	if _, ok := outbounds[0].(map[string]any)["domain_resolver"]; ok {

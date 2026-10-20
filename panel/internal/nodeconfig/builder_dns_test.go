@@ -71,8 +71,11 @@ func TestBuildEmitsPerNodeDNS(t *testing.T) {
 		t.Fatal(err)
 	}
 	dns := cfg["dns"].(map[string]any)
-	if dns["final"] != "doh-cf" || dns["client_subnet"] != "203.0.113.0/24" {
+	if dns["final"] != "doh-ali" || dns["client_subnet"] != "203.0.113.0/24" {
 		t.Fatalf("dns = %v", dns)
+	}
+	if _, ok := dns["rules"]; ok {
+		t.Fatalf("dns rules = %v", dns["rules"])
 	}
 	servers := dns["servers"].([]any)
 	cf := servers[2].(map[string]any)
@@ -80,7 +83,7 @@ func TestBuildEmitsPerNodeDNS(t *testing.T) {
 		t.Fatalf("cloudflare server = %v", cf)
 	}
 	resolver := cf["domain_resolver"].(map[string]any)
-	if resolver["server"] != "doh-google" {
+	if resolver["server"] != "doh-ali" {
 		t.Fatalf("bootstrap = %v", resolver)
 	}
 	outbounds := cfg["outbounds"].([]any)
@@ -107,6 +110,9 @@ func TestBuildEmitsPerNodeDNS(t *testing.T) {
 	inbound := cfg["inbounds"].([]any)[0].(map[string]any)
 	if inbound["sniff"] != true {
 		t.Fatalf("inbound = %v", inbound)
+	}
+	if strings.Contains(result.JSON, "geosite-cn") {
+		t.Fatalf("node DNS must not download geosite-cn:\n%s", result.JSON)
 	}
 	route := cfg["route"].(map[string]any)
 	rules := route["rules"].([]any)
