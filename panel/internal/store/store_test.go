@@ -746,18 +746,18 @@ func TestCreateNodePrefillsDNS(t *testing.T) {
 	if err := s.CreateNode(n); err != nil {
 		t.Fatal(err)
 	}
-	if n.DNS.Servers[0].Tag != "doh-ali" || n.DNS.Servers[2].Server != "1.1.1.1" {
+	if n.DNS.Servers[0].Name != "doh-ali" || n.DNS.Servers[2].URL != "https://1.1.1.1/dns-query" {
 		t.Fatalf("create did not prefill DNS: %+v", n.DNS)
 	}
 	got, err := s.GetNode(n.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got.DNS.Servers) != 4 || got.DNS.Servers[1].ServerName != "doh.pub" || !got.DNS.Sniff {
+	if len(got.DNS.Servers) != 4 || got.DNS.Servers[1].URL != "https://1.12.12.12/dns-query" || !got.DNS.Sniff {
 		t.Fatalf("stored DNS = %+v", got.DNS)
 	}
 	got.DNS.Strategy = "ipv4_only"
-	got.DNS.Servers[3].Server = "dns.google"
+	got.DNS.Servers[3].URL = "https://dns.google/dns-query"
 	if err := s.UpdateNodeOperatorFields(n.ID, NodeOperatorUpdate{DNS: &got.DNS}); err != nil {
 		t.Fatal(err)
 	}
@@ -765,7 +765,7 @@ func TestCreateNodePrefillsDNS(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.DNS.Strategy != "ipv4_only" || got.DNS.Servers[3].Server != "dns.google" {
+	if got.DNS.Strategy != "ipv4_only" || got.DNS.Servers[3].URL != "https://dns.google/dns-query" {
 		t.Fatalf("updated DNS = %+v", got.DNS)
 	}
 	empty := Node{}.DNS
@@ -776,7 +776,7 @@ func TestCreateNodePrefillsDNS(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.DNS.Servers[3].Server != "8.8.8.8" || got.DNS.Strategy != "prefer_ipv4" {
+	if got.DNS.Servers[3].URL != "https://8.8.8.8/dns-query" || got.DNS.Strategy != "prefer_ipv4" {
 		t.Fatalf("empty DNS update should restore defaults, got %+v", got.DNS)
 	}
 }

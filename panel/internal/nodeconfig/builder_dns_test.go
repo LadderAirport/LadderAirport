@@ -58,7 +58,7 @@ func TestBuildEmitsPerNodeDNS(t *testing.T) {
 	loaded.SingboxVersion = "1.12.22"
 	loaded.EgressInterface = "eth0"
 	loaded.DNS.ClientSubnet = "203.0.113.0/24"
-	loaded.DNS.Servers[2].Server = "cloudflare-dns.com"
+	loaded.DNS.Servers[2].URL = "https://cloudflare-dns.com/dns-query"
 	if err := st.UpdateNode(loaded); err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +79,8 @@ func TestBuildEmitsPerNodeDNS(t *testing.T) {
 	}
 	servers := dns["servers"].([]any)
 	cf := servers[2].(map[string]any)
-	if cf["server"] != "cloudflare-dns.com" || cf["bind_interface"] != "eth0" {
+	tls, _ := cf["tls"].(map[string]any)
+	if cf["server"] != "cloudflare-dns.com" || cf["bind_interface"] != "eth0" || tls["server_name"] != "cloudflare-dns.com" {
 		t.Fatalf("cloudflare server = %v", cf)
 	}
 	resolver := cf["domain_resolver"].(map[string]any)

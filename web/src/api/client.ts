@@ -682,18 +682,13 @@ export interface CreateNodeInput {
   control_mode?: 'push' | 'uplink'
 }
 
+/** One DNS row. The panel parses url into a sing-box 1.12 server when it builds the node config. */
 export interface NodeDNSServer {
-  tag: string
-  type?: string
-  server: string
-  server_port: number
-  path?: string
-  server_name?: string
-  /** Missing means enabled. Older saved rows omit this field. */
-  enabled?: boolean
+  name: string
+  url: string
 }
 
-/** Per-node DNS. Server order is the list order; the first enabled row is final. */
+/** Per-node DNS. Server order is the list order; the first row is final. */
 export interface NodeDNS {
   strategy: string
   sniff: boolean
@@ -708,7 +703,7 @@ export interface NodeDNS {
   servers: NodeDNSServer[]
 }
 
-/** Matches pkg/nodedns.Default. The first enabled row is final. */
+/** Matches pkg/nodedns.Default. The first row is final. */
 export const DEFAULT_NODE_DNS: NodeDNS = {
   strategy: 'prefer_ipv4',
   sniff: true,
@@ -721,10 +716,10 @@ export const DEFAULT_NODE_DNS: NodeDNS = {
   disable_cache: false,
   client_subnet: '',
   servers: [
-    { tag: 'doh-ali', type: 'https', server: '223.5.5.5', server_port: 443, path: '/dns-query', server_name: 'dns.alidns.com', enabled: true },
-    { tag: 'doh-dnspod', type: 'https', server: '1.12.12.12', server_port: 443, path: '/dns-query', server_name: 'doh.pub', enabled: true },
-    { tag: 'doh-cf', type: 'https', server: '1.1.1.1', server_port: 443, path: '/dns-query', server_name: 'cloudflare-dns.com', enabled: true },
-    { tag: 'doh-google', type: 'https', server: '8.8.8.8', server_port: 443, path: '/dns-query', server_name: 'dns.google', enabled: true },
+    { name: 'doh-ali', url: 'https://223.5.5.5/dns-query' },
+    { name: 'doh-dnspod', url: 'https://1.12.12.12/dns-query' },
+    { name: 'doh-cf', url: 'https://1.1.1.1/dns-query' },
+    { name: 'doh-google', url: 'https://8.8.8.8/dns-query' },
   ],
 }
 

@@ -4,6 +4,8 @@ import (
 	"context"
 	stdjson "encoding/json"
 	"testing"
+
+	"github.com/ladderairport/pkg/nodedns"
 )
 
 // Stop must shut down the traffic persist loop and wait for it; a later Apply
@@ -142,6 +144,36 @@ func TestEnsureDefaultDNSBindsAndResolvesNextHop(t *testing.T) {
 	}
 	if _, ok := outbounds[0].(map[string]any)["domain_resolver"]; ok {
 		t.Fatal("direct outbound must not set domain_resolver")
+	}
+}
+
+func TestHostnameDNSWithSystemResolverParses(t *testing.T) {
+	emitted, err := (nodedns.Config{Servers: []nodedns.Server{{
+		Name: "cf", URL: "https://one.one.one.one/dns-query",
+	}}}).Emit(nodedns.EmitOptions{BindInterface: "eth0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	document := map[string]any{
+		"log":       map[string]any{"level": "error", "disabled": true},
+		"inbounds":  []any{},
+		"outbounds": []any{map[string]any{"type": "direct", "tag": "direct"}},
+		"dns":       emitted.DNS,
+	}
+	raw, err := stdjson.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := NewBoxRuntime(t.TempDir())
+	opts, err := r.parseOptions(string(raw))
+	if err != nil {
+		t.Fatalf("parseOptions: %v\n%s", err, raw)
+	}
+	if opts.DNS == nil || len(opts.DNS.Servers) != 2 || opts.DNS.Final != "cf" {
+		t.Fatalf("dns = %#v", opts.DNS)
+	}
+	if opts.DNS.Servers[1].Type != "local" || opts.DNS.Servers[1].Tag != nodedns.SystemResolverTag {
+		t.Fatalf("bootstrap = %#v", opts.DNS.Servers[1])
 	}
 }
 
