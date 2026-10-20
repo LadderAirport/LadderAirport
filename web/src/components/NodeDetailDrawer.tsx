@@ -50,9 +50,7 @@ import {
   type ManagedDomain,
   type ProtocolCertificate,
   type Task,
-  type NodeDNS,
   type UpdateNodeInput,
-  DEFAULT_NODE_DNS,
 } from '../api/client'
 import {
   clientVersionLine,
@@ -69,23 +67,11 @@ import {
 import { copyText } from '../lib/clipboard'
 import { toast } from '../lib/toast'
 import { NodeOverviewTab } from './node-detail/NodeOverviewTab'
+import { NodeDNSTab } from './node-detail/NodeDNSTab'
 import { NodeInboundsTab, type InboundNATEdit } from './node-detail/NodeInboundsTab'
 import { NodeFRPSTab } from './node-detail/NodeFRPSTab'
 import { NodeSystemTab } from './node-detail/NodeSystemTab'
 import { NodeOpsTab, type LogEntry } from './node-detail/NodeOpsTab'
-
-function cloneNodeDNS(dns?: NodeDNS): NodeDNS {
-  const source = dns && dns.servers?.length ? dns : DEFAULT_NODE_DNS
-  return {
-    ...DEFAULT_NODE_DNS,
-    ...source,
-    client_subnet: source.client_subnet || '',
-    servers: DEFAULT_NODE_DNS.servers.map((item) => {
-      const found = source.servers.find((server) => server.tag === item.tag)
-      return { ...item, ...found }
-    }),
-  }
-}
 
 type Props = {
   nodeId: string | null
@@ -222,8 +208,8 @@ export default function NodeDetailDrawer({ nodeId, onClose, onChanged }: Props) 
   const [editPort, setEditPort] = useState<number | string>(50051)
   const [editPublic, setEditPublic] = useState('')
   const [editEgress, setEditEgress] = useState('')
-  const [editDNS, setEditDNS] = useState<NodeDNS>(DEFAULT_NODE_DNS)
   const [editDDNS, setEditDDNS] = useState(true)
+  const [dnsDirty, setDNSDirty] = useState(false)
   const [editControlMode, setEditControlMode] = useState<'push' | 'uplink'>('push')
   const [connectionErrors, setConnectionErrors] = useState<ConnectionErrors>({})
   const [ifaces, setIfaces] = useState<NetworkInterface[]>([])
@@ -329,7 +315,6 @@ export default function NodeDetailDrawer({ nodeId, onClose, onChanged }: Props) 
     setEditPort(targetNode.grpc_port || 50051)
     setEditPublic(targetNode.public_address || '')
     setEditEgress(targetNode.egress_interface || '')
-    setEditDNS(cloneNodeDNS(targetNode.dns))
     setEditDDNS(targetNode.ddns_enabled ?? true)
     setEditControlMode(targetNode.control_mode === 'uplink' ? 'uplink' : 'push')
     setConnectionErrors({})
@@ -511,7 +496,6 @@ export default function NodeDetailDrawer({ nodeId, onClose, onChanged }: Props) 
         labels: editLabels,
         public_address: publicAddress || undefined,
         egress_interface: editEgress || undefined,
-        dns: editDNS,
         ddns_enabled: editDDNS,
         control_mode: editControlMode,
       }
@@ -525,7 +509,6 @@ export default function NodeDetailDrawer({ nodeId, onClose, onChanged }: Props) 
       const updated = await updateNode(id, input)
       if (isCurrentNode(id, currentGen)) {
         setNode(updated)
-        setEditDNS(cloneNodeDNS(updated.dns))
         setEditToken(updated.token || '')
         setEditTokenChanged(false)
       }
@@ -860,14 +843,13 @@ export default function NodeDetailDrawer({ nodeId, onClose, onChanged }: Props) 
         Number(editPort) !== (node.grpc_port || 50051) ||
         editPublic.trim() !== (node.public_address || '') ||
         editEgress !== (node.egress_interface || '') ||
-        JSON.stringify(editDNS) !== JSON.stringify(cloneNodeDNS(node.dns)) ||
         editDDNS !== (node.ddns_enabled !== false) ||
         editControlMode !== (node.control_mode || 'push') ||
         editTokenChanged ||
         JSON.stringify(editLabels) !== JSON.stringify(node.labels || [])),
   )
   const inboundsDirty = JSON.stringify(inboundNAT) !== JSON.stringify(savedInboundNAT)
-  const drawerDirty = connectionDirty || inboundsDirty || frpsDirty
+  const drawerDirty = connectionDirty || inboundsDirty || frpsDirty || dnsDirty
 
   const requestClose = () => {
     if (busy) return
@@ -991,9 +973,10 @@ export default function NodeDetailDrawer({ nodeId, onClose, onChanged }: Props) 
 
             {/* Content Tabs */}
             <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col overflow-hidden">
-              <div className="px-6 pt-4 border-b border-border bg-muted/20">
-                <TabsList className="bg-muted border border-border">
+              <div className="px-6 pt-4 border-b border-border bg-muted/20 overflow-x-auto">
+                <TabsList className="bg-muted border border-border w-max">
                   <TabsTrigger value="connection">连接 / NAT</TabsTrigger>
+                  <TabsTrigger value="dns">DNS</TabsTrigger>
                   <TabsTrigger value="inbounds">
                     入站{attachedCount ? ` (${attachedCount})` : ''}
                   </TabsTrigger>
@@ -1026,10 +1009,6 @@ export default function NodeDetailDrawer({ nodeId, onClose, onChanged }: Props) 
                     setEditPublic={setEditPublic}
                     editEgress={editEgress}
                     setEditEgress={setEditEgress}
-                    editDNS={editDNS}
-                    setEditDNS={setEditDNS}
-                    singboxVersion={node.singbox_version}
-                    clientType={node.client_type}
                     editDDNS={editDDNS}
                     setEditDDNS={setEditDDNS}
                     editControlMode={editControlMode}
@@ -1044,6 +1023,17 @@ export default function NodeDetailDrawer({ nodeId, onClose, onChanged }: Props) 
                     copiedUpgrade={copiedUpgrade}
                     copyInstallCommand={copyInstallCommand}
                     copyUpgradeCommand={copyUpgradeCommand}
+                  />
+                </TabsContent>
+
+                <TabsContent value="dns" forceMount className="mt-0 data-[state=inactive]:hidden">
+                  <NodeDNSTab
+                    node={node}
+                    onSaved={(updated) => {
+                      if (updated.id === id) setNode(updated)
+                      onChanged()
+                    }}
+                    onDirtyChange={setDNSDirty}
                   />
                 </TabsContent>
 
@@ -1131,7 +1121,7 @@ export default function NodeDetailDrawer({ nodeId, onClose, onChanged }: Props) 
     <ConfirmModal
       open={closeConfirm}
       title="放弃未保存的修改？"
-      description="节点连接、入站关联或 FRPS 草稿尚未保存，关闭后会丢失这些更改。"
+      description="节点连接、DNS、入站关联或 FRPS 草稿尚未保存，关闭后会丢失这些更改。"
       confirmText="放弃并关闭"
       confirmVariant="destructive"
       onConfirm={() => {
