@@ -69,6 +69,7 @@ import {
   listExternalSources,
   listInbounds,
   listProxyChains,
+  listProxyUsers,
   listRoutePlans,
   listSubscriptions,
   previewExternalSource,
@@ -80,6 +81,7 @@ import {
   type ExternalSource,
   type InboundConfig,
   type ProxyChain,
+  type ProxyUser,
   type RoutePlan,
   type Subscription,
 } from '../api/client'
@@ -102,6 +104,7 @@ type SubscriptionEditor = {
   chainIds: Set<string>
   sourceIds: Set<string>
   routePlanId: string
+  userId: string
 }
 
 type SourceEditor = {
@@ -127,6 +130,7 @@ const EMPTY_SUB_EDITOR: SubscriptionEditor = {
   chainIds: new Set(),
   sourceIds: new Set(),
   routePlanId: '',
+  userId: '',
 }
 
 const EMPTY_SOURCE_EDITOR: SourceEditor = {
@@ -145,6 +149,7 @@ export default function Subscriptions() {
   const [sources, setSources] = useState<ExternalSource[]>([])
   const [chains, setChains] = useState<ProxyChain[]>([])
   const [routePlans, setRoutePlans] = useState<RoutePlan[]>([])
+  const [users, setUsers] = useState<ProxyUser[]>([])
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState('')
   const [pending, setPending] = useState<Set<string>>(new Set())
@@ -181,6 +186,7 @@ export default function Subscriptions() {
       listExternalSources(),
       listProxyChains(),
       listRoutePlans(),
+      listProxyUsers(),
     ])
     if (version !== loadVersion.current) return
 
@@ -195,6 +201,8 @@ export default function Subscriptions() {
     else errors.push(errorText(results[3].reason, '代理链列表加载失败'))
     if (results[4].status === 'fulfilled') setRoutePlans(results[4].value ?? [])
     else errors.push(errorText(results[4].reason, '路由计划列表加载失败'))
+    if (results[5].status === 'fulfilled') setUsers(results[5].value ?? [])
+    else errors.push(errorText(results[5].reason, '用户列表加载失败'))
     setLoadError(errors.join('；'))
     setLoading(false)
   }, [])
@@ -299,6 +307,7 @@ export default function Subscriptions() {
       chainIds: new Set(subscription.chain_ids ?? []),
       sourceIds: new Set(subscription.external_source_ids ?? []),
       routePlanId: subscription.route_plan_id ?? '',
+      userId: subscription.user_id ?? '',
     })
   }
 
@@ -360,6 +369,7 @@ export default function Subscriptions() {
       chain_ids: subEditor.includeAllChains ? [] : Array.from(subEditor.chainIds),
       external_source_ids: Array.from(subEditor.sourceIds),
       route_plan_id: subEditor.routePlanId,
+      user_id: subEditor.userId,
     }
     try {
       const saved = subEditor.id
@@ -778,6 +788,11 @@ export default function Subscriptions() {
                               通用分发 (Clash / sing-box / V2Ray)
                             </Badge>
                             {sub.disabled && <StatusBadge value="disabled" />}
+                            {sub.user_id && (
+                              <Badge variant="outline" className="border-border text-[11px]">
+                                用户：{users.find((user) => user.id === sub.user_id)?.name ?? '未知'}
+                              </Badge>
+                            )}
                           </div>
                         </div>
 
@@ -1253,6 +1268,26 @@ export default function Subscriptions() {
                       {plan.enabled ? '' : '（已停用）'}
                     </option>
                   ))}
+              </select>
+            </div>
+
+            <div className="space-y-2 pt-2 border-t border-zinc-900">
+              <Label className="text-xs text-zinc-300 block">绑定用户</Label>
+              <p className="text-[10px] text-zinc-500 -mt-0.5">
+                绑定后本地节点使用该用户的独立凭据，停用用户即可同时吊销订阅和节点访问；不绑定则使用入站共享凭据
+              </p>
+              <select
+                value={subEditor.userId}
+                onChange={(e) => setSubEditor({ ...subEditor, userId: e.target.value })}
+                className="h-9 w-full rounded-md border border-zinc-800 bg-zinc-900 px-3 text-sm text-zinc-100 cursor-pointer"
+              >
+                <option value="">不绑定（共享凭据）</option>
+                {users.map((user) => (
+                  <option key={user.id} value={user.id}>
+                    {user.name}
+                    {user.enabled ? '' : '（已停用）'}
+                  </option>
+                ))}
               </select>
             </div>
 

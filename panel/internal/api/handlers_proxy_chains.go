@@ -79,6 +79,7 @@ func (s *Server) handleDeleteProxyChain(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusConflict, err.Error())
 		return
 	}
+	s.scheduleAdmissionReapplyIfUsers()
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -119,6 +120,8 @@ func (s *Server) setProxyChainEnabled(w http.ResponseWriter, r *http.Request, en
 // plan proxies through the chain, since any node may compose it locally.
 // Best-effort, like reapplyForRoutePlanChange.
 func (s *Server) reapplyForChainChange(r *http.Request, chainID string) {
+	// Chain hops also decide which proxy users each hop inbound admits.
+	s.scheduleAdmissionReapplyIfUsers()
 	plans, err := s.Store.ListEnabledGlobalRoutePlans()
 	if err != nil {
 		return

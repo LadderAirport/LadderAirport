@@ -343,9 +343,33 @@ type Subscription struct {
 	Enabled     bool   `json:"enabled"`
 	// Disabled is the kill switch for the public link: /sub/{token} answers
 	// 404 while disabled, as if the subscription did not exist.
-	Disabled      bool  `json:"disabled"`
-	CreatedAtUnix int64 `json:"created_at_unix"`
-	UpdatedAtUnix int64 `json:"updated_at_unix"`
+	Disabled bool `json:"disabled"`
+	// UserID binds the subscription to a proxy user: rendered local endpoints
+	// carry that user's derived credentials. Empty = shared inbound credentials.
+	UserID        string `json:"user_id"`
+	CreatedAtUnix int64  `json:"created_at_unix"`
+	UpdatedAtUnix int64  `json:"updated_at_unix"`
+}
+
+// ProxyUser is a protocol-level principal without a login. Its credentials
+// for every protocol are derived from Secret (see package proxyuser).
+type ProxyUser struct {
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	Note          string `json:"note"`
+	Enabled       bool   `json:"enabled"`
+	Secret        string `json:"-"`
+	CreatedAtUnix int64  `json:"created_at_unix"`
+	UpdatedAtUnix int64  `json:"updated_at_unix"`
+}
+
+// InboundAdmission holds per-inbound admission settings. AdmissionOnly drops
+// the shared "default" credential so only proxy users (and the panel's
+// internal chain credential derived from InternalSecret) are accepted.
+type InboundAdmission struct {
+	InboundID      string `json:"inbound_id"`
+	AdmissionOnly  bool   `json:"admission_only"`
+	InternalSecret string `json:"-"`
 }
 
 // RoutePlan scopes an ordered rule set: "global" plans are pushed into every

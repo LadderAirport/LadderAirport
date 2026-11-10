@@ -21,6 +21,7 @@ import {
   Moon,
   ShieldCheck,
   Globe2,
+  UsersRound,
 } from 'lucide-react'
 import { ApiError, AUTH_EXPIRED_EVENT, listNodes, logout } from './api/client'
 import { toast } from './lib/toast'
@@ -30,6 +31,7 @@ const Login = lazy(() => import('./pages/Login'))
 const Fleet = lazy(() => import('./pages/Fleet'))
 const Inbounds = lazy(() => import('./pages/Inbounds'))
 const Subscriptions = lazy(() => import('./pages/Subscriptions'))
+const Users = lazy(() => import('./pages/Users'))
 const ProxyChains = lazy(() => import('./pages/ProxyChains'))
 const RoutePlans = lazy(() => import('./pages/RoutePlans'))
 const Settings = lazy(() => import('./pages/Settings'))
@@ -42,6 +44,7 @@ const NAV = [
   { path: '/chains', label: '代理链', icon: <Waypoints className="h-4 w-4" /> },
   { path: '/route-plans', label: '路由计划', icon: <RouteIcon className="h-4 w-4" /> },
   { path: '/subscriptions', label: '订阅', icon: <Share2 className="h-4 w-4" /> },
+  { path: '/users', label: '用户', icon: <UsersRound className="h-4 w-4" /> },
   { path: '/pki', label: '证书', icon: <ShieldCheck className="h-4 w-4" /> },
   { path: '/dns-certificates', label: 'DNS/ACME', icon: <Globe2 className="h-4 w-4" /> },
   { path: '/settings', label: '设置', icon: <SettingsIcon className="h-4 w-4" /> },
@@ -123,6 +126,7 @@ function AppLayout() {
     if (path.startsWith('/chains')) return '/chains'
     if (path.startsWith('/route-plans')) return '/route-plans'
     if (path.startsWith('/subscriptions')) return '/subscriptions'
+    if (path.startsWith('/users')) return '/users'
     if (path.startsWith('/settings')) return '/settings'
     if (path.startsWith('/pki')) return '/pki'
     if (path.startsWith('/dns-certificates')) return '/dns-certificates'
@@ -274,6 +278,7 @@ export default function App() {
             <Route path="/chains" element={<ProxyChains />} />
             <Route path="/route-plans" element={<RoutePlans />} />
             <Route path="/subscriptions" element={<Subscriptions />} />
+            <Route path="/users" element={<Users />} />
             <Route path="/settings" element={<Settings />} />
             <Route path="/pki" element={<PKI />} />
             <Route path="/dns-certificates" element={<DNSCertificates />} />

@@ -15,6 +15,7 @@
 - **配置下发**：关联入站 → 完整 sing-box JSON → push 走 gRPC，uplink 等下次 HTTP 拉取；启动时自动同步并重试
 - **FRP Server**：节点内嵌 FRPS，Panel 加密保存认证令牌并独立下发、启停和查看状态
 - **订阅**：Clash / sing-box 链接，基础 CN 分流；可聚合外部机场订阅源；订阅令牌支持轮换与停用
+- **用户准入**：不设登录入口，按用户派生独立的 UUID / 密码并写入节点入站；入站可设为「仅准入用户」，停用用户即同时吊销订阅与节点访问（见 [用户与协议准入](docs/proxy-users.md)）
 - **代理链**：2–8 个节点入站串成多跳链路，在客户端配置中组合（Clash `dialer-proxy` / sing-box `detour`），节点无需额外配置（见 [代理链](docs/proxy-chains.md)）
 - **路由计划**：全局计划下发节点 sing-box 路由规则，订阅级计划注入订阅渲染输出；域名 / 关键字 / IP / 进程名匹配，代理链 / 直连 / 拦截动作（见 [路由计划](docs/route-plans.md)）
 - **DNS / ACME**：AliDNS、DNSPod、Cloudflare 自动解析；DNS-01 自动签发和续期协议 TLS 证书，私钥只留在 Agent

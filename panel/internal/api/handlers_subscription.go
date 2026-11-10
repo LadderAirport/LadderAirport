@@ -38,6 +38,7 @@ type createSubBody struct {
 	ChainIDs           []string `json:"chain_ids"`
 	IncludeAllChains   *bool    `json:"include_all_chains"`
 	ExternalSourceIDs  []string `json:"external_source_ids"`
+	UserID             string   `json:"user_id"`
 	Enabled            *bool    `json:"enabled"`
 }
 
@@ -78,7 +79,13 @@ func (s *Server) handleCreateSubscription(w http.ResponseWriter, r *http.Request
 	if body.IncludeAllChains != nil {
 		includeAllChains = *body.IncludeAllChains
 	}
+	userID, err := s.validateSubscriptionUser(body.UserID)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	sub := &store.Subscription{
+		UserID:             userID,
 		Name:               body.Name,
 		Format:             format,
 		Token:              token,
@@ -105,6 +112,9 @@ func (s *Server) handleCreateSubscription(w http.ResponseWriter, r *http.Request
 			return
 		}
 	}
+	if sub.UserID != "" {
+		s.scheduleAdmissionReapply()
+	}
 	writeJSON(w, http.StatusCreated, s.enrichSub(r, sub))
 }
 
@@ -129,6 +139,7 @@ func (s *Server) handleUpdateSubscription(w http.ResponseWriter, r *http.Request
 		IncludeAllChains   *bool    `json:"include_all_chains"`
 		ExternalSourceIDs  []string `json:"external_source_ids"`
 		RoutePlanID        *string  `json:"route_plan_id"`
+		UserID             *string  `json:"user_id"`
 		Enabled            *bool    `json:"enabled"`
 		Rotate             bool     `json:"rotate_token"`
 	}
@@ -189,6 +200,14 @@ func (s *Server) handleUpdateSubscription(w http.ResponseWriter, r *http.Request
 		}
 		existing.RoutePlanID = planID
 	}
+	if body.UserID != nil {
+		userID, err := s.validateSubscriptionUser(*body.UserID)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		existing.UserID = userID
+	}
 	if body.Rotate {
 		tok, err := randomToken(16)
 		if err != nil {
@@ -211,12 +230,16 @@ func (s *Server) handleUpdateSubscription(w http.ResponseWriter, r *http.Request
 			return
 		}
 	}
+	if before.UserID != "" || existing.UserID != "" {
+		s.scheduleAdmissionReapply()
+	}
 	updated, _ := s.Store.GetSubscription(id)
 	writeJSON(w, http.StatusOK, s.enrichSub(r, updated))
 }
 
 func (s *Server) handleDeleteSubscription(w http.ResponseWriter, r *http.Request) {
 	id := pathID(r)
+	old, _ := s.Store.GetSubscription(id)
 	if err := s.Store.DeleteSubscription(id); err != nil {
 		if isNotFound(err) {
 			writeError(w, http.StatusNotFound, err.Error())
@@ -224,6 +247,9 @@ func (s *Server) handleDeleteSubscription(w http.ResponseWriter, r *http.Request
 		}
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
+	}
+	if old != nil && old.UserID != "" {
+		s.scheduleAdmissionReapply()
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -346,6 +372,13 @@ func (s *Server) handlePublicSubscription(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusForbidden, "订阅已禁用")
 		return
 	}
+	if sub.UserID != "" {
+		// A disabled or deleted user loses the link along with node access.
+		if u, err := s.Store.GetProxyUser(sub.UserID); err != nil || !u.Enabled {
+			writeError(w, http.StatusNotFound, "订阅不存在")
+			return
+		}
+	}
 	format := detectFormat(r)
 	useDomain := parseUseDomain(r)
 	body, ctype, err := s.renderSubscription(r.Context(), sub, format, useDomain)
@@ -423,6 +456,10 @@ func (s *Server) renderSubscription(ctx context.Context, sub *store.Subscription
 		}
 	}
 	chains, err := s.subscriptionChains(sub)
+	if err != nil {
+		return nil, "", err
+	}
+	local, chains, err = s.applySubscriptionCredentials(sub, local, chains)
 	if err != nil {
 		return nil, "", err
 	}
@@ -556,6 +593,9 @@ func (s *Server) setSubscriptionDisabled(w http.ResponseWriter, r *http.Request,
 		if err := s.Store.UpdateSubscription(sub); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
+		}
+		if sub.UserID != "" {
+			s.scheduleAdmissionReapply()
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})

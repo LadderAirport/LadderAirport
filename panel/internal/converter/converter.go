@@ -44,10 +44,21 @@ type ConvertOptions struct {
 	SniffOverride    bool
 	SniffTimeout     string
 	DropInboundSniff bool
+	// Users adds per-user credentials to inbounds, keyed by inbound ID
+	// (protocol admission, see package proxyuser).
+	Users map[string]InboundUsers
 	// ResolveStrategy inserts an action resolve (no server, so dns.rules still
 	// apply) immediately before ip_cidr rules when DNS is set and at least one
 	// ip_cidr rule is emitted.
 	ResolveStrategy string
+}
+
+// InboundUsers lists the sing-box user entries for one inbound.
+// ReplaceDefault drops the inbound's own shared credential (admission-only);
+// otherwise the users are appended after it.
+type InboundUsers struct {
+	ReplaceDefault bool
+	Users          []map[string]any
 }
 
 // RouteRule is one resolved global route-plan rule. MatchType is one of
@@ -81,6 +92,11 @@ func Convert(inbounds []store.InboundConfig, opts ConvertOptions) ([]byte, error
 		mapped, err := mapInbound(in)
 		if err != nil {
 			return nil, fmt.Errorf("入站 %q（%s）：%w", in.Name, in.ID, err)
+		}
+		if users, ok := opts.Users[in.ID]; ok {
+			if err := applyInboundUsers(mapped, users); err != nil {
+				return nil, fmt.Errorf("入站 %q（%s）：%w", in.Name, in.ID, err)
+			}
 		}
 		listen, _ := mapped["listen"].(string)
 		port, _ := asInt(mapped["listen_port"])
@@ -198,6 +214,30 @@ func Convert(inbounds []store.InboundConfig, opts ConvertOptions) ([]byte, error
 		cfg["dns"] = opts.DNS
 	}
 	return json.Marshal(cfg)
+}
+
+func applyInboundUsers(mapped map[string]any, users InboundUsers) error {
+	if users.ReplaceDefault {
+		if len(users.Users) == 0 {
+			return fmt.Errorf("仅准入用户模式下用户列表不能为空")
+		}
+		mapped["users"] = users.Users
+		return nil
+	}
+	if len(users.Users) == 0 {
+		return nil
+	}
+	existing, ok := mapped["users"].([]map[string]any)
+	if !ok || len(existing) == 0 {
+		// Shadowsocks single-user / unauthenticated HTTP-SOCKS: appending
+		// would silently switch the inbound into a different auth mode.
+		return fmt.Errorf("该入站不支持追加用户")
+	}
+	merged := make([]map[string]any, 0, len(existing)+len(users.Users))
+	merged = append(merged, existing...)
+	merged = append(merged, users.Users...)
+	mapped["users"] = merged
+	return nil
 }
 
 func cloneMap(in map[string]any) map[string]any {

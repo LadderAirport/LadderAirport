@@ -95,6 +95,11 @@ type Server struct {
 	// probe/FRPS/…) run over it with full gRPC parity; the HTTP report +
 	// config-sync + command-queue paths remain as a degraded fallback.
 	Uplink *uplinkhub.Hub
+
+	// admissionMu guards admissionTimer, which debounces node re-pushes
+	// after proxy-user / admission changes (see scheduleAdmissionReapply).
+	admissionMu    sync.Mutex
+	admissionTimer *time.Timer
 }
 
 // Handler returns an http.Handler with all routes, auth middleware, and embedded SPA.
@@ -229,6 +234,13 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/inbounds", s.handleCreateInbound)
 	mux.HandleFunc("PUT /api/v1/inbounds/{id}", s.handleUpdateInbound)
 	mux.HandleFunc("DELETE /api/v1/inbounds/{id}", s.handleDeleteInbound)
+	mux.HandleFunc("GET /api/v1/inbound-admissions", s.handleListInboundAdmissions)
+	mux.HandleFunc("PUT /api/v1/inbounds/{id}/admission", s.handlePutInboundAdmission)
+	mux.HandleFunc("GET /api/v1/proxy-users", s.handleListProxyUsers)
+	mux.HandleFunc("POST /api/v1/proxy-users", s.handleCreateProxyUser)
+	mux.HandleFunc("PUT /api/v1/proxy-users/{id}", s.handleUpdateProxyUser)
+	mux.HandleFunc("DELETE /api/v1/proxy-users/{id}", s.handleDeleteProxyUser)
+	mux.HandleFunc("POST /api/v1/proxy-users/{id}/reset-credentials", s.handleResetProxyUserCredentials)
 
 	mux.HandleFunc("GET /api/v1/fleet/overview", s.handleFleetOverview)
 	mux.HandleFunc("POST /api/v1/fleet/refresh", s.handleFleetRefresh)

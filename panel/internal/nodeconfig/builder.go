@@ -12,6 +12,7 @@ import (
 
 	"github.com/ladderairport/panel/internal/converter"
 	"github.com/ladderairport/panel/internal/frpconnection"
+	"github.com/ladderairport/panel/internal/proxyuser"
 	"github.com/ladderairport/panel/internal/store"
 	"github.com/ladderairport/panel/internal/subscription"
 	"github.com/ladderairport/pkg/hashutil"
@@ -64,11 +65,16 @@ func (b *Builder) BuildWithChains(nodeID string, chains []store.ProxyChain) (Res
 	if err != nil {
 		return Result{}, err
 	}
+	users, err := b.inboundUsers(inbounds, chains)
+	if err != nil {
+		return Result{}, err
+	}
 	convertOpts := converter.ConvertOptions{
 		BindInterface: bindInterface,
 		AllowEmpty:    true,
 		Outbounds:     chainOutbounds,
 		RouteRules:    routeRules,
+		Users:         users,
 	}
 	if nodedns.SupportsSchema(node.SingboxVersion) {
 		dnsCfg := node.DNS
@@ -279,12 +285,22 @@ func (b *Builder) composeChainFrom(chain store.ProxyChain, from int, bindInterfa
 	if from >= len(chain.Hops) {
 		return nil, "direct", nil
 	}
+	admissions, err := b.Store.ListInboundAdmissions()
+	if err != nil {
+		return nil, "", err
+	}
 	out := make([]map[string]any, 0, len(chain.Hops)-from)
 	previous := ""
 	for i := from; i < len(chain.Hops); i++ {
 		ep, err := b.ResolveHopEndpoint(chain, i)
 		if err != nil {
 			return nil, "", err
+		}
+		// Node-side hops authenticate with the panel's internal credential
+		// when the hop inbound only admits proxy users.
+		ep, err = proxyuser.InternalEndpoint(ep, admissions)
+		if err != nil {
+			return nil, "", fmt.Errorf("代理链 %q 第 %d 跳：%w", chain.Name, i+1, err)
 		}
 		outbound, err := subscription.SingboxOutbound(ep)
 		if err != nil {
@@ -592,4 +608,42 @@ func paramInt(params map[string]any, key string) (int, error) {
 	default:
 		return 0, fmt.Errorf("%s 无效", key)
 	}
+}
+
+// inboundUsers computes the per-user credentials of every enabled inbound on
+// a node from the users' subscriptions (see proxyuser.BuildPlan).
+func (b *Builder) inboundUsers(inbounds []store.InboundConfig, chains []store.ProxyChain) (map[string]converter.InboundUsers, error) {
+	admissions, err := b.Store.ListInboundAdmissions()
+	if err != nil {
+		return nil, err
+	}
+	users, err := b.Store.ListProxyUsers()
+	if err != nil {
+		return nil, err
+	}
+	var plan *proxyuser.Plan
+	if len(users) > 0 {
+		subs, err := b.Store.ListSubscriptions()
+		if err != nil {
+			return nil, err
+		}
+		plan, err = proxyuser.BuildPlan(users, subs, chains)
+		if err != nil {
+			return nil, err
+		}
+	}
+	out := map[string]converter.InboundUsers{}
+	for _, in := range inbounds {
+		if !in.Enabled {
+			continue
+		}
+		result, ok, err := proxyuser.ServerUsers(in, admissions[in.ID], plan.UsersFor(in.ID))
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			out[in.ID] = converter.InboundUsers{ReplaceDefault: result.ReplaceDefault, Users: result.Users}
+		}
+	}
+	return out, nil
 }

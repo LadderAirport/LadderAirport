@@ -1,7 +1,9 @@
 package store
 
 import (
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"maps"
@@ -259,6 +261,21 @@ func (s *Store) migrate() error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_config_snapshots_node_created
 			ON config_snapshots(node_id, created_at_unix DESC)`,
+		`CREATE TABLE IF NOT EXISTS proxy_users (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL COLLATE NOCASE UNIQUE,
+			note TEXT NOT NULL DEFAULT '',
+			enabled INTEGER NOT NULL DEFAULT 1,
+			secret TEXT NOT NULL,
+			created_at_unix INTEGER NOT NULL,
+			updated_at_unix INTEGER NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS inbound_admission (
+			inbound_id TEXT PRIMARY KEY,
+			admission_only INTEGER NOT NULL DEFAULT 0,
+			internal_secret TEXT NOT NULL,
+			FOREIGN KEY (inbound_id) REFERENCES inbounds(id) ON DELETE CASCADE
+		)`,
 		`CREATE TABLE IF NOT EXISTS external_sources (
 			id TEXT PRIMARY KEY,
 			name TEXT NOT NULL,
@@ -571,6 +588,7 @@ func (s *Store) migrate() error {
 		`ALTER TABLE subscriptions ADD COLUMN include_all_chains INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE subscriptions ADD COLUMN route_plan_id TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE subscriptions ADD COLUMN disabled INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE subscriptions ADD COLUMN user_id TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE dns_accounts ADD COLUMN zone TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE managed_domains ADD COLUMN manual_cname TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE managed_domains ADD COLUMN desired_cname TEXT NOT NULL DEFAULT ''`,
@@ -1458,6 +1476,9 @@ func (s *Store) DeleteInbound(id string) error {
 	if _, err := tx.Exec(`DELETE FROM node_inbounds WHERE inbound_id = ?`, id); err != nil {
 		return fmt.Errorf("删除节点入站关联失败：%w", err)
 	}
+	if _, err := tx.Exec(`DELETE FROM inbound_admission WHERE inbound_id = ?`, id); err != nil {
+		return fmt.Errorf("删除入站准入设置失败：%w", err)
+	}
 	res, err := tx.Exec(`DELETE FROM inbounds WHERE id = ?`, id)
 	if err != nil {
 		return fmt.Errorf("删除入站失败：%w", err)
@@ -1793,13 +1814,53 @@ func (s *Store) NodeConfigFingerprint(nodeID string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("计算节点配置指纹失败：%w", err)
 	}
-	return fmt.Sprintf("%d:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d|%s",
+	admissionKey, err := s.admissionFingerprint()
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%d:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d|%s|%s",
 		nodeUpdated, ownInbounds, ownInboundUpdated,
 		chains, chainUpdated, inbounds, inboundUpdated,
 		nodes, nodeUpdatedGlobal,
 		tlsBindings, tlsUpdated, domains, domainUpdated, certs, certUpdated,
-		attachmentKey,
+		attachmentKey, admissionKey,
 	), nil
+}
+
+// admissionFingerprint digests everything that decides inbound user lists:
+// proxy users (incl. secrets), the subscription fields BuildPlan reads, and
+// inbound admission flags. Content-hashed rather than timestamp-based so two
+// edits within one second are still seen, and secrets never sit in the cache.
+func (s *Store) admissionFingerprint() (string, error) {
+	h := sha256.New()
+	queries := []string{
+		`SELECT id || ':' || enabled || ':' || secret FROM proxy_users ORDER BY id`,
+		`SELECT id || ':' || user_id || ':' || enabled || ':' || disabled || ':' ||
+			include_standalone || ':' || COALESCE(include_all_inbounds, 1) || ':' || inbound_ids_json || ':' ||
+			include_all_chains || ':' || chain_ids_json
+		FROM subscriptions WHERE user_id != '' ORDER BY id`,
+		`SELECT inbound_id || ':' || admission_only || ':' || internal_secret FROM inbound_admission ORDER BY inbound_id`,
+	}
+	for i, q := range queries {
+		rows, err := s.db.Query(q)
+		if err != nil {
+			return "", fmt.Errorf("计算用户准入指纹失败：%w", err)
+		}
+		for rows.Next() {
+			var row string
+			if err := rows.Scan(&row); err != nil {
+				rows.Close()
+				return "", fmt.Errorf("计算用户准入指纹失败：%w", err)
+			}
+			fmt.Fprintf(h, "%d|%s\n", i, row)
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return "", fmt.Errorf("计算用户准入指纹失败：%w", err)
+		}
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 // --- Tasks ---
@@ -2219,11 +2280,11 @@ func (s *Store) CreateSubscription(sub *Subscription) error {
 		INSERT INTO subscriptions (
 			id, name, format, token, inbound_ids_json, include_all_inbounds,
 			include_standalone, chain_ids_json, include_all_chains,
-			route_plan_id, enabled, disabled, created_at_unix, updated_at_unix
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			route_plan_id, enabled, disabled, user_id, created_at_unix, updated_at_unix
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		sub.ID, sub.Name, sub.Format, sub.Token, idsJSON, boolToInt(sub.IncludeAllInbounds),
 		boolToInt(sub.IncludeStandalone), chainIDsJSON, boolToInt(sub.IncludeAllChains),
-		sub.RoutePlanID, boolToInt(sub.Enabled), boolToInt(sub.Disabled), sub.CreatedAtUnix, sub.UpdatedAtUnix,
+		sub.RoutePlanID, boolToInt(sub.Enabled), boolToInt(sub.Disabled), sub.UserID, sub.CreatedAtUnix, sub.UpdatedAtUnix,
 	)
 	if err != nil {
 		return fmt.Errorf("创建订阅失败：%w", err)
@@ -2260,11 +2321,11 @@ func (s *Store) UpdateSubscription(sub *Subscription) error {
 		UPDATE subscriptions SET
 			name=?, format=?, token=?, inbound_ids_json=?, include_all_inbounds=?,
 			include_standalone=?, chain_ids_json=?, include_all_chains=?,
-			route_plan_id=?, enabled=?, disabled=?, updated_at_unix=?
+			route_plan_id=?, enabled=?, disabled=?, user_id=?, updated_at_unix=?
 		WHERE id=?`,
 		sub.Name, sub.Format, sub.Token, idsJSON, boolToInt(sub.IncludeAllInbounds),
 		boolToInt(sub.IncludeStandalone), chainIDsJSON, boolToInt(sub.IncludeAllChains),
-		sub.RoutePlanID, boolToInt(sub.Enabled), boolToInt(sub.Disabled), sub.UpdatedAtUnix, sub.ID,
+		sub.RoutePlanID, boolToInt(sub.Enabled), boolToInt(sub.Disabled), sub.UserID, sub.UpdatedAtUnix, sub.ID,
 	)
 	if err != nil {
 		return fmt.Errorf("更新订阅失败：%w", err)
@@ -2290,7 +2351,7 @@ func (s *Store) DeleteSubscription(id string) error {
 
 const subscriptionSelectCols = `id, name, format, token, inbound_ids_json, COALESCE(include_all_inbounds, 1),
 	include_standalone, chain_ids_json, include_all_chains,
-	route_plan_id, enabled, disabled, created_at_unix, updated_at_unix`
+	route_plan_id, enabled, disabled, user_id, created_at_unix, updated_at_unix`
 
 func (s *Store) GetSubscription(id string) (*Subscription, error) {
 	row := s.db.QueryRow(`SELECT `+subscriptionSelectCols+`
@@ -2338,7 +2399,7 @@ func scanSubscription(row interface {
 	err := row.Scan(
 		&sub.ID, &sub.Name, &sub.Format, &sub.Token, &idsJSON, &includeAll,
 		&includeStandalone, &chainIDsJSON, &includeAllChains,
-		&sub.RoutePlanID, &enabled, &disabled, &sub.CreatedAtUnix, &sub.UpdatedAtUnix,
+		&sub.RoutePlanID, &enabled, &disabled, &sub.UserID, &sub.CreatedAtUnix, &sub.UpdatedAtUnix,
 	)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("订阅不存在")

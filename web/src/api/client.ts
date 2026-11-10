@@ -543,6 +543,8 @@ export interface Subscription {
   route_plan_id?: string
   /** Admin kill-switch: disabled subscriptions return 404 on the public link. */
   disabled: boolean
+  /** Bound proxy user; empty means shared inbound credentials. */
+  user_id?: string
   url?: string
   created_at_unix: number
   updated_at_unix: number
@@ -1054,6 +1056,61 @@ export function deleteInbound(id: string): Promise<void> {
   return request('DELETE', `/inbounds/${id}`)
 }
 
+// --- Inbound admission ---
+
+export interface InboundAdmission {
+  inbound_id: string
+  /** Only proxy users are accepted; the inbound's shared credential stops working. */
+  admission_only: boolean
+  /** Whether the protocol / settings can carry per-user credentials. */
+  supported: boolean
+  reason?: string
+}
+
+export function listInboundAdmissions(): Promise<InboundAdmission[]> {
+  return request('GET', '/inbound-admissions')
+}
+
+export function setInboundAdmission(id: string, admissionOnly: boolean): Promise<InboundAdmission> {
+  return request('PUT', `/inbounds/${id}/admission`, { admission_only: admissionOnly })
+}
+
+// --- Proxy users ---
+
+export interface ProxyUser {
+  id: string
+  name: string
+  note: string
+  enabled: boolean
+  subscription_count: number
+  created_at_unix: number
+  updated_at_unix: number
+}
+
+export function listProxyUsers(): Promise<ProxyUser[]> {
+  return request('GET', '/proxy-users')
+}
+
+export function createProxyUser(body: { name: string; note?: string; enabled?: boolean }): Promise<ProxyUser> {
+  return request('POST', '/proxy-users', body)
+}
+
+export function updateProxyUser(
+  id: string,
+  body: { name?: string; note?: string; enabled?: boolean },
+): Promise<ProxyUser> {
+  return request('PUT', `/proxy-users/${id}`, body)
+}
+
+export function deleteProxyUser(id: string): Promise<void> {
+  return request('DELETE', `/proxy-users/${id}`)
+}
+
+/** Rotate every derived credential of the user; clients must refresh their subscription. */
+export function resetProxyUserCredentials(id: string): Promise<ProxyUser> {
+  return request('POST', `/proxy-users/${id}/reset-credentials`)
+}
+
 // --- Templates ---
 
 export function listTemplates(): Promise<Template[]> {
@@ -1240,6 +1297,7 @@ export function createSubscription(body: {
   include_all_chains?: boolean
   external_source_ids?: string[]
   route_plan_id?: string
+  user_id?: string
   enabled?: boolean
 }): Promise<Subscription> {
   return request('POST', '/subscriptions', body)
@@ -1257,6 +1315,7 @@ export function updateSubscription(
     include_all_chains?: boolean
     external_source_ids?: string[]
     route_plan_id?: string
+    user_id?: string
     enabled?: boolean
     rotate_token?: boolean
   },
