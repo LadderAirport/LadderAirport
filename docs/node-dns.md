@@ -2,10 +2,10 @@
 
 节点 DNS 是这台节点上的 sing-box 用来解析两类名字的配置：
 
-- 代理链下一跳的主机名（只解析出站的 `server`，不把用户目标解析成 IP）
+- 全局路由计划在本机组合的代理链首跳主机名（只解析出站的 `server`，不把用户目标解析成 IP）
 - 路由最终落到本机 `direct` 时的用户目标
 
-中间跳把域名原样交给下一跳。用户目标由出口那一跳、用那一跳自己的 DNS 解析。
+组合出的链把域名原样交给上游，用户目标由链的出口节点用它自己的 DNS 解析。
 
 DNS 存在这条 Agent 上，没有全局层，也没有单独的设备表。Panel 里一台已注册的 Agent 就是 `nodes` 里的一行，对应一个 sing-box 进程。同一台物理机如果跑了两个 Agent，会是两行，各自一份 DNS，不会互相覆盖。因此配置放在 `nodes.dns_json`，只作用于这一台。
 
@@ -69,11 +69,10 @@ URL 的主机是域名时，生成配置会给它加上 `domain_resolver`，策�
 sing-box 不低于 1.12 时，节点配置还会：
 
 1. 入站嗅探内层 TLS / HTTP / QUIC（默认开，超时 300ms）。`sniff_override_destination` 默认开，把 IP 目标改成嗅探到的域名，域名路由计划才能命中。路由规则最前面还有一条 `action: sniff`。
-2. 代理链入站规则仍在域名规则之前，避免链上流量被路由计划抢走。
-3. 域名、后缀、关键字规则。
-4. 计划里有 `ip_cidr` 时，在这些规则前插入 `action: resolve`，不指定 server。1.12 因此只查 `dns.final`；1.14 会走上面的故障转移规则。策略用节点上的地址策略。
-5. `direct` 出站不设 `domain_resolver`。用户目标由上一条 `resolve` 解析，不在 `direct` 上另做一次查找。
-6. 链出站设置 `domain_resolver`，server 为第一行 DNS，策略 `ipv4_only`。只解析下一跳主机名，不把 DNS detour 进这条链。1.14 上这个查找不走故障转移规则。
+2. 域名、后缀、关键字规则。
+3. 计划里有 `ip_cidr` 时，在这些规则前插入 `action: resolve`，不指定 server。1.12 因此只查 `dns.final`；1.14 会走上面的故障转移规则。策略用节点上的地址策略。
+4. `direct` 出站不设 `domain_resolver`。用户目标由上一条 `resolve` 解析，不在 `direct` 上另做一次查找。
+5. 组合链的首跳出站设置 `domain_resolver`，server 为第一行 DNS，策略 `ipv4_only`。只解析首跳主机名，不把 DNS detour 进这条链；后续各跳经 `detour` 拨出，主机名交给上游。1.14 上这个查找不走故障转移规则。
 
 出口网卡非空时，`direct`、链出站和每一台下发的 DNS 服务器都带同一个 `bind_interface`。节点 DNS 不再附带 `geosite-cn` rule-set。
 

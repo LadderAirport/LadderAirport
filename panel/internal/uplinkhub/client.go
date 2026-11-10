@@ -21,7 +21,7 @@ var unmarshalOpts = protojson.UnmarshalOptions{DiscardUnknown: true}
 
 // Client is a WS-backed AgentControl client. It satisfies the same method set
 // as *nodeclient.Client (NodeLive, NodeFRPS, NodeFRPSMappings, NodeSysMetrics,
-// NodeBBR, proxychain.Agent, certmanager.Agent, dnsreconcile.Agent,
+// NodeBBR, certmanager.Agent, dnsreconcile.Agent,
 // batch.NodeRPC), so Panel live handlers route to a connected uplink node
 // exactly as they would to a push node's gRPC control plane.
 type Client struct {

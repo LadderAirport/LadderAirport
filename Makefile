@@ -9,7 +9,7 @@ VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo 0.1.
 GIT_COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 BUILD_TIME ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 
-# sing-box 版本唯一来源：agent/sing-box 子模块的 git tag（如 v1.14.3 → 1.14.3）。
+# sing-box 版本唯一来源：agent/sing-box 子模块的 git tag（如 v1.14.4 → 1.14.4）。
 # CI（.github/workflows/ci.yml、release.yml）用同一命令派生；三处勿再硬编码。
 SINGBOX_VERSION ?= $(shell tag=$$(git -C agent/sing-box describe --tags 2>/dev/null) && echo "$${tag}" | sed 's/^v//' || echo unknown)
 

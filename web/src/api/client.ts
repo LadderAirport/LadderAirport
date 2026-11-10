@@ -524,9 +524,6 @@ export interface Settings {
   max_concurrency: number
   listen_addr: string
   public_base_url?: string
-  chain_probe_url?: string
-  chain_probe_interval_sec?: number
-  chain_probe_timeout_sec?: number
 }
 
 export interface Subscription {
@@ -561,18 +558,15 @@ export interface ProxyChainHop {
   tls_skip_verify: boolean
 }
 
+/**
+ * A multi-hop path composed in client configs (Clash dialer-proxy / sing-box
+ * detour). Each hop references a standalone node/inbound binding.
+ */
 export interface ProxyChain {
   id: string
   name: string
   enabled: boolean
-  state: 'disabled' | 'deploying' | 'healthy' | 'degraded' | string
   hops: ProxyChainHop[]
-  last_deploy_unix: number
-  last_deploy_error?: string
-  last_probe_unix: number
-  last_probe_delay_ms: number
-  last_probe_error?: string
-  failed_hop_index: number
   created_at_unix: number
   updated_at_unix: number
 }
@@ -580,13 +574,6 @@ export interface ProxyChain {
 export interface ProxyChainInput {
   name: string
   hops: Array<Omit<ProxyChainHop, 'chain_id' | 'position'>>
-}
-
-export interface ChainProbeResult {
-  ok: boolean
-  delay_ms: number
-  message?: string
-  failed_hop_index: number
 }
 
 export type RoutePlanMatchType =
@@ -783,9 +770,6 @@ export interface PutSettingsInput {
   max_concurrency?: number
   listen_addr?: string
   public_base_url?: string
-  chain_probe_url?: string
-  chain_probe_interval_sec?: number
-  chain_probe_timeout_sec?: number
   new_password?: string
 }
 
@@ -1329,13 +1313,6 @@ export function disableProxyChain(id: string): Promise<ProxyChain> {
   return request('POST', `/proxy-chains/${id}/disable`)
 }
 
-export function probeProxyChain(id: string): Promise<ChainProbeResult> {
-  return request('POST', `/proxy-chains/${id}/probe`)
-}
-
-export function previewProxyChain(body: ProxyChainInput): Promise<{ configs: Record<string, unknown> }> {
-  return request('POST', '/proxy-chains/preview', body)
-}
 
 // --- Route plans (subscription routing rules) ---
 

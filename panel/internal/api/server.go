@@ -19,7 +19,6 @@ import (
 	"github.com/ladderairport/panel/internal/dnsprovider"
 	"github.com/ladderairport/panel/internal/nodeclient"
 	"github.com/ladderairport/panel/internal/pki"
-	"github.com/ladderairport/panel/internal/proxychain"
 	"github.com/ladderairport/panel/internal/secretstore"
 	"github.com/ladderairport/panel/internal/store"
 	"github.com/ladderairport/panel/internal/subscription"
@@ -76,7 +75,6 @@ type Server struct {
 
 	// Timeout for probe/metrics/logs dials. Defaults to Runner.Timeout or 10s.
 	Timeout time.Duration
-	Chains  *proxychain.Service
 	PKI     *pki.Manager
 	// Secrets encrypts DNS/ACME credentials and FRPS authentication tokens.
 	Secrets      *secretstore.Store
@@ -86,8 +84,6 @@ type Server struct {
 	// loginAttempts tracks failed logins per client IP for brute-force backoff.
 	loginMu       sync.Mutex
 	loginAttempts map[string]*loginAttempt
-	// chainsOnce guards lazy initialization of Chains (see chainService).
-	chainsOnce sync.Once
 
 	// cmdMu guards cmdWaiters, the per-node long-poll wakeup channels used by
 	// the uplink command queue for near-instant dispatch.
@@ -325,13 +321,11 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 
 	mux.HandleFunc("GET /api/v1/proxy-chains", s.handleListProxyChains)
 	mux.HandleFunc("POST /api/v1/proxy-chains", s.handleCreateProxyChain)
-	mux.HandleFunc("POST /api/v1/proxy-chains/preview", s.handlePreviewProxyChain)
 	mux.HandleFunc("GET /api/v1/proxy-chains/{id}", s.handleGetProxyChain)
 	mux.HandleFunc("PUT /api/v1/proxy-chains/{id}", s.handleUpdateProxyChain)
 	mux.HandleFunc("DELETE /api/v1/proxy-chains/{id}", s.handleDeleteProxyChain)
 	mux.HandleFunc("POST /api/v1/proxy-chains/{id}/enable", s.handleEnableProxyChain)
 	mux.HandleFunc("POST /api/v1/proxy-chains/{id}/disable", s.handleDisableProxyChain)
-	mux.HandleFunc("POST /api/v1/proxy-chains/{id}/probe", s.handleProbeProxyChain)
 
 	mux.HandleFunc("GET /api/v1/external-sources", s.handleListExternalSources)
 	mux.HandleFunc("POST /api/v1/external-sources", s.handleCreateExternalSource)

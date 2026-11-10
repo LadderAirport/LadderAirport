@@ -17,23 +17,24 @@ type ConvertOptions struct {
 	// BindInterface sets sing-box direct outbound bind_interface.
 	// Empty means OS default routing (field omitted).
 	BindInterface string
-	// AllowEmpty emits a valid listener-free config. This is required when a
-	// chain is disabled or the final inbound is detached.
+	// AllowEmpty emits a valid listener-free config (a node with no bindings).
 	AllowEmpty bool
-	// ChainRoutes routes traffic arriving on InboundID to Outbound.
-	ChainRoutes []ChainRoute
-	// RouteRules are match-condition rules from enabled global route plans.
-	// They are emitted after chain rules and before the final outbound.
-	// Outbound must reference a known outbound tag ("direct" or a chain
-	// next-hop tag); rules with unknown or empty targets are skipped.
+	// Outbounds are extra tagged outbounds appended after direct, e.g. proxy
+	// chains composed with detour for global route plans.
+	Outbounds []map[string]any
+	// RouteRules are match-condition rules from enabled global route plans,
+	// emitted before the final outbound. Outbound must reference a known
+	// outbound tag ("direct" or one of Outbounds); rules with unknown or
+	// empty targets are skipped.
 	RouteRules []RouteRule
 	// DNS is the sing-box 1.12 dns object. Nil keeps the legacy config with
 	// no dns block, so agents older than 1.12 receive unchanged JSON.
 	DNS map[string]any
 	// DNSRuleSet is appended to route.rule_set when set. Node DNS does not emit one.
 	DNSRuleSet map[string]any
-	// ChainDomainResolver is copied onto chain outbounds (not direct) so the
-	// next-hop hostname resolves without detouring through the chain itself.
+	// ChainDomainResolver is copied onto extra outbounds that dial directly
+	// (no detour) so their server hostname resolves without detouring through
+	// the chain itself. Detoured hops leave resolution to their upstream.
 	ChainDomainResolver map[string]any
 	// Sniff, when DNS is also set, enables a leading route sniff action.
 	// SniffOverride also sets the legacy inbound sniff_override_destination
@@ -47,11 +48,6 @@ type ConvertOptions struct {
 	// apply) immediately before ip_cidr rules when DNS is set and at least one
 	// ip_cidr rule is emitted.
 	ResolveStrategy string
-}
-
-type ChainRoute struct {
-	InboundID string
-	Outbound  map[string]any
 }
 
 // RouteRule is one resolved global route-plan rule. MatchType is one of
@@ -115,35 +111,26 @@ func Convert(inbounds []store.InboundConfig, opts ConvertOptions) ([]byte, error
 	}
 
 	outbounds := []map[string]any{direct}
-	rules := make([]map[string]any, 0, len(opts.ChainRoutes))
+	rules := []map[string]any{}
 	outboundTags := map[string]bool{"direct": true}
-	for _, route := range opts.ChainRoutes {
-		tag, ok := inboundTags[route.InboundID]
-		if !ok {
-			return nil, fmt.Errorf("代理链路由入站未启用：%s", route.InboundID)
+	for _, outbound := range opts.Outbounds {
+		if outbound == nil {
+			continue
 		}
-		if route.Outbound == nil {
-			return nil, fmt.Errorf("入站 %s 缺少代理链路由出站", route.InboundID)
-		}
-		outboundTag, _ := route.Outbound["tag"].(string)
+		outboundTag, _ := outbound["tag"].(string)
 		if strings.TrimSpace(outboundTag) == "" {
-			return nil, fmt.Errorf("入站 %s 的代理链路由必须提供出站标签", route.InboundID)
+			return nil, fmt.Errorf("附加出站必须提供标签")
 		}
 		if outboundTags[outboundTag] {
 			return nil, fmt.Errorf("出站标签 %q 重复", outboundTag)
 		}
 		outboundTags[outboundTag] = true
-		if opts.ChainDomainResolver != nil {
-			if _, exists := route.Outbound["domain_resolver"]; !exists {
-				route.Outbound["domain_resolver"] = cloneMap(opts.ChainDomainResolver)
+		if _, detoured := outbound["detour"]; !detoured && opts.ChainDomainResolver != nil {
+			if _, exists := outbound["domain_resolver"]; !exists {
+				outbound["domain_resolver"] = cloneMap(opts.ChainDomainResolver)
 			}
 		}
-		outbounds = append(outbounds, route.Outbound)
-		rules = append(rules, map[string]any{
-			"inbound":  []string{tag},
-			"action":   "route",
-			"outbound": outboundTag,
-		})
+		outbounds = append(outbounds, outbound)
 	}
 	var domainRules []map[string]any
 	var ipRules []map[string]any

@@ -22,7 +22,6 @@ import (
 	"github.com/ladderairport/panel/internal/dnsproviders"
 	"github.com/ladderairport/panel/internal/dnsreconcile"
 	"github.com/ladderairport/panel/internal/pki"
-	"github.com/ladderairport/panel/internal/proxychain"
 	"github.com/ladderairport/panel/internal/secretstore"
 	"github.com/ladderairport/panel/internal/store"
 	"github.com/ladderairport/panel/internal/subscription"
@@ -198,14 +197,9 @@ func main() {
 	}
 
 	agg := subscription.NewAggregator(st)
-	chainService := proxychain.NewService(st, runner.ConfigBuilder, runner.Coordinator)
-	chainService.PKI = ca
 	uplinkHub := uplinkhub.NewHub()
 	// Wire the live WS uplink into every service that must reach a connected
 	// uplink node in real time, at parity with the push/gRPC control plane.
-	chainService.UplinkClient = func(nodeID string) (proxychain.Agent, bool) {
-		return uplinkHub.Client(nodeID)
-	}
 	certificateService.UplinkClient = func(nodeID string) (certmanager.Agent, bool) {
 		return uplinkHub.Client(nodeID)
 	}
@@ -217,7 +211,6 @@ func main() {
 		Runner:       runner,
 		Secret:       secret,
 		Aggregator:   agg,
-		Chains:       chainService,
 		PKI:          ca,
 		Secrets:      secrets,
 		DNSProviders: dnsRegistry,
@@ -266,7 +259,6 @@ func main() {
 		log.Printf("外部源后台刷新已启用（间隔=%s）", subscription.BackgroundTick)
 		agg.RunBackground(context.Background(), subscription.BackgroundTick)
 	}()
-	go chainService.RunProbeLoop(context.Background())
 	go automationRunner.Run(context.Background())
 
 	// Retention cleanup: once at startup, then hourly.

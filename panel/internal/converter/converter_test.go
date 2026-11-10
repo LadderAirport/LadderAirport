@@ -226,7 +226,7 @@ func TestConvertEmptyError(t *testing.T) {
 	}
 }
 
-func TestConvertAllowEmptyAndChainRoute(t *testing.T) {
+func TestConvertAllowEmptyAndExtraOutbounds(t *testing.T) {
 	empty, err := Convert(nil, ConvertOptions{AllowEmpty: true})
 	if err != nil {
 		t.Fatalf("Convert empty: %v", err)
@@ -242,24 +242,20 @@ func TestConvertAllowEmptyAndChainRoute(t *testing.T) {
 	}
 
 	in := store.InboundConfig{
-		ID: "chain-entry", Name: "entry", Protocol: "shadowsocks", Enabled: true,
+		ID: "entry", Name: "entry", Protocol: "shadowsocks", Enabled: true,
 		Params: map[string]any{
 			"listen": "0.0.0.0", "port": float64(8388),
 			"method": "aes-256-gcm", "password": "secret", "network": "tcp",
 		},
 	}
-	raw, err := Convert([]store.InboundConfig{in}, ConvertOptions{
-		ChainRoutes: []ChainRoute{{
-			InboundID: in.ID,
-			Outbound: map[string]any{
-				"type": "shadowsocks", "tag": "chain-next",
-				"server": "next.example", "server_port": 8389,
-				"method": "aes-256-gcm", "password": "next-secret",
-			},
-		}},
-	})
+	next := map[string]any{
+		"type": "shadowsocks", "tag": "chain-next",
+		"server": "next.example", "server_port": 8389,
+		"method": "aes-256-gcm", "password": "next-secret",
+	}
+	raw, err := Convert([]store.InboundConfig{in}, ConvertOptions{Outbounds: []map[string]any{next}})
 	if err != nil {
-		t.Fatalf("Convert chain route: %v", err)
+		t.Fatalf("Convert extra outbound: %v", err)
 	}
 	var cfg map[string]any
 	if err := json.Unmarshal(raw, &cfg); err != nil {
@@ -270,9 +266,11 @@ func TestConvertAllowEmptyAndChainRoute(t *testing.T) {
 		t.Fatalf("outbounds = %#v", outbounds)
 	}
 	route := cfg["route"].(map[string]any)
-	rules := route["rules"].([]any)
-	if len(rules) != 1 || rules[0].(map[string]any)["outbound"] != "chain-next" {
-		t.Fatalf("route rules = %#v", rules)
+	if _, ok := route["rules"]; ok {
+		t.Fatalf("extra outbounds alone must not add route rules: %#v", route["rules"])
+	}
+	if _, err := Convert(nil, ConvertOptions{AllowEmpty: true, Outbounds: []map[string]any{next, next}}); err == nil {
+		t.Fatal("duplicate outbound tags must be rejected")
 	}
 }
 

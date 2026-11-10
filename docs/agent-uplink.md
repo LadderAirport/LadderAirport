@@ -120,7 +120,6 @@ Agent ──执行本地操作──► 回传结果  POST /api/v1/agent/command
 - **命令队列**：接口枚举、Agent 升级、系统指标、BBR 读/写、FRPS mappings/start/stop 入队并返回 `202 + command_id`，前端轮询结果。
 - **仍拒绝即时拨号**：日志流、出站探测、协议证书部署、DNS 公网探测对 uplink 返回 `409`（无即时通道或未纳入队列）。
 - **读最近上报**：探测（probe）返回最近一次上报的 `status` / 版本 / 能力，不发起拨号；节点指标直接回落库的 `connections` / 流量 / CPU / 内存。
-- **落快照代替直连**：代理链下发对 uplink 节点写配置快照而非拨号。
 - **fleet 刷新**：不拨号，只看 `uplink_last_seen_unix` 是否超过 45 秒（`uplinkStaleAfter`），超时用带 cutoff 的 `MarkUplinkUnreachable` 置 `unreachable`，cutoff 条件避免并发上报被覆盖。
 - **bootstrap 跳过**：启动时的全量下发只针对 push 节点；uplink 节点自行拉取，不进 bootstrap 队列。
 - **切换保护**：把节点改成 uplink 时，要求它已上报过 `uplink-v1` 能力，否则拒绝并提示先升级 Agent。

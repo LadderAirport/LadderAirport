@@ -31,6 +31,12 @@ func setupChainRefs(t *testing.T, st *store.Store) *store.ProxyChain {
 	if err := st.CreateInbound(inB); err != nil {
 		t.Fatal(err)
 	}
+	if err := st.SetNodeInbounds(nodeA.ID, []string{inA.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetNodeInbounds(nodeB.ID, []string{inB.ID}); err != nil {
+		t.Fatal(err)
+	}
 	chain := &store.ProxyChain{
 		Name: "rp-chain",
 		Hops: []store.ProxyChainHop{
@@ -49,7 +55,7 @@ func TestRoutePlanAPICRUD(t *testing.T) {
 	resp := login(t, client, ts.URL, "admin")
 	resp.Body.Close()
 	chain := setupChainRefs(t, st)
-	if err := st.SetProxyChainRuntime(chain.ID, true, "healthy", ""); err != nil {
+	if err := st.SetProxyChainEnabled(chain.ID, true); err != nil {
 		t.Fatal(err)
 	}
 

@@ -15,6 +15,11 @@ import (
 func RenderV2ray(endpoints []ProxyEndpoint) ([]byte, error) {
 	var lines []string
 	for _, ep := range endpoints {
+		// Share links have no standard way to express dialing through another
+		// proxy, so composed proxy chains are omitted from this format.
+		if ep.Detour != "" || ep.Hidden {
+			continue
+		}
 		uri, err := renderOneShareURI(ep)
 		if err != nil {
 			// Skip endpoints that fail rendering or return error for invalid params

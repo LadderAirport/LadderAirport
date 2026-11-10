@@ -314,11 +314,10 @@ type Settings struct {
 	MaxConcurrency    int    `json:"max_concurrency"`
 	ListenAddr        string `json:"listen_addr"`
 	// PublicBaseURL is used to render full subscription links (e.g. https://panel.example.com).
-	PublicBaseURL             string `json:"public_base_url"`
-	ChainProbeURL             string `json:"chain_probe_url"`
-	ChainProbeIntervalSec     int    `json:"chain_probe_interval_sec"`
-	ChainProbeTimeoutSec      int    `json:"chain_probe_timeout_sec"`
-	ChainSubscriptionMigrated bool   `json:"-"`
+	PublicBaseURL string `json:"public_base_url"`
+	// ChainSubscriptionMigrated makes new subscriptions include all chains by
+	// default once the legacy standalone→chain switch has happened.
+	ChainSubscriptionMigrated bool `json:"-"`
 	// SessionVersion revokes issued session tokens when bumped (logout /
 	// password change). Never serialized to API clients.
 	SessionVersion int64 `json:"-"`
@@ -377,26 +376,22 @@ type RoutePlanRule struct {
 	Enabled       bool   `json:"enabled"`
 }
 
-// ProxyChain is an ordered server-side proxy path. Hops are chain-owned and
-// therefore do not appear in node_inbounds unless separately attached.
+// ProxyChain is an ordered multi-hop proxy path composed in client configs.
+// Every hop references an existing standalone binding (node + inbound); the
+// panel renders hop N dialed through hop N-1 (Clash dialer-proxy / sing-box
+// detour). Nodes only run their ordinary inbounds with direct egress.
 type ProxyChain struct {
-	ID               string          `json:"id"`
-	Name             string          `json:"name"`
-	Enabled          bool            `json:"enabled"`
-	State            string          `json:"state"` // disabled|deploying|healthy|degraded
-	Hops             []ProxyChainHop `json:"hops"`
-	LastDeployUnix   int64           `json:"last_deploy_unix"`
-	LastDeployError  string          `json:"last_deploy_error,omitempty"`
-	LastProbeUnix    int64           `json:"last_probe_unix"`
-	LastProbeDelayMS int             `json:"last_probe_delay_ms"`
-	LastProbeError   string          `json:"last_probe_error,omitempty"`
-	FailedHopIndex   int             `json:"failed_hop_index"` // -1 when unknown/healthy
-	CreatedAtUnix    int64           `json:"created_at_unix"`
-	UpdatedAtUnix    int64           `json:"updated_at_unix"`
+	ID            string          `json:"id"`
+	Name          string          `json:"name"`
+	Enabled       bool            `json:"enabled"`
+	Hops          []ProxyChainHop `json:"hops"`
+	CreatedAtUnix int64           `json:"created_at_unix"`
+	UpdatedAtUnix int64           `json:"updated_at_unix"`
 }
 
 // ProxyChainHop describes how a consumer (the client for hop zero, otherwise
-// the preceding Agent) reaches this hop.
+// the preceding hop's node) reaches this hop. Empty dial fields fall back to
+// the binding's public address/port.
 type ProxyChainHop struct {
 	ChainID       string `json:"chain_id,omitempty"`
 	Position      int    `json:"position"`

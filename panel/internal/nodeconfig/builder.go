@@ -1,5 +1,6 @@
 // Package nodeconfig assembles the complete desired sing-box configuration for
-// one Agent, including standalone bindings and all enabled proxy chains.
+// one Agent: its standalone bindings plus, for global route plans that target
+// a proxy chain, the chain composed as detour-linked outbounds.
 package nodeconfig
 
 import (
@@ -34,9 +35,9 @@ func (b *Builder) Build(nodeID string) (Result, error) {
 	return b.BuildWithChains(nodeID, enabledChains(chains))
 }
 
-// BuildWithChains builds against an explicit effective chain set. It is used by
-// ordered deployment to validate/apply a candidate topology before committing
-// it to SQLite.
+// BuildWithChains builds against an explicit effective chain set. Chains are
+// not deployed onto their hops (hops are ordinary standalone bindings); they
+// only matter here when an enabled global route plan proxies through one.
 func (b *Builder) BuildWithChains(nodeID string, chains []store.ProxyChain) (Result, error) {
 	if b == nil || b.Store == nil {
 		return Result{}, fmt.Errorf("节点配置构建器尚未配置")
@@ -49,70 +50,24 @@ func (b *Builder) BuildWithChains(nodeID string, chains []store.ProxyChain) (Res
 	if err != nil {
 		return Result{}, err
 	}
-	byID := make(map[string]bool, len(inbounds))
-	for _, in := range inbounds {
-		byID[in.ID] = true
-	}
 	bindInterface := strings.TrimSpace(node.EgressInterface)
 	if strings.EqualFold(strings.TrimSpace(node.ClientType), "android") {
 		// Android node builds cannot bind a chosen NIC. Omit the field here
 		// so a pushed config does not fail dial; the agent also strips it.
 		bindInterface = ""
 	}
-	routes := []converter.ChainRoute{}
-	for _, chain := range chains {
-		if !chain.Enabled {
-			continue
-		}
-		for i, hop := range chain.Hops {
-			if hop.NodeID != nodeID {
-				continue
-			}
-			in, err := b.Store.GetInbound(hop.InboundID)
-			if err != nil {
-				return Result{}, fmt.Errorf("代理链 %q 第 %d 跳：%w", chain.Name, i+1, err)
-			}
-			if !in.Enabled {
-				return Result{}, fmt.Errorf("代理链 %q 第 %d 跳的入站已禁用", chain.Name, i+1)
-			}
-			if byID[in.ID] {
-				return Result{}, fmt.Errorf("代理链 %q 第 %d 跳与独立入站 %s 冲突", chain.Name, i+1, in.ID)
-			}
-			byID[in.ID] = true
-			inbounds = append(inbounds, *in)
-			if i == len(chain.Hops)-1 {
-				continue
-			}
-			ep, err := b.ResolveHopEndpoint(chain, i+1)
-			if err != nil {
-				return Result{}, err
-			}
-			outbound, err := subscription.SingboxOutbound(ep)
-			if err != nil {
-				return Result{}, fmt.Errorf("代理链 %q 第 %d 跳的出站配置失败：%w", chain.Name, i+1, err)
-			}
-			outbound["tag"] = ChainOutboundTag(chain.ID, i)
-			if bindInterface != "" {
-				outbound["bind_interface"] = bindInterface
-			}
-			routes = append(routes, converter.ChainRoute{
-				InboundID: hop.InboundID,
-				Outbound:  outbound,
-			})
-		}
-	}
 	inbounds, err = b.applyManagedTLS(nodeID, inbounds)
 	if err != nil {
 		return Result{}, err
 	}
-	routeRules, err := b.globalRouteRules(nodeID, chains)
+	routeRules, chainOutbounds, err := b.globalRouteRules(nodeID, chains, bindInterface)
 	if err != nil {
 		return Result{}, err
 	}
 	convertOpts := converter.ConvertOptions{
 		BindInterface: bindInterface,
 		AllowEmpty:    true,
-		ChainRoutes:   routes,
+		Outbounds:     chainOutbounds,
 		RouteRules:    routeRules,
 	}
 	if nodedns.SupportsSchema(node.SingboxVersion) {
@@ -239,16 +194,19 @@ func allocateFRPLocalPort(tag string, used map[int]bool) (int, error) {
 }
 
 // globalRouteRules resolves enabled global route plans into converter rules
-// for this node. proxy actions target the chain's next-hop outbound at this
-// node; the last hop (the chain exit) maps to direct. Rules targeting chains
-// this node is not part of are skipped with a debug log. process_name rules
-// never apply on the agent side (subscription rendering only).
-func (b *Builder) globalRouteRules(nodeID string, chains []store.ProxyChain) ([]converter.RouteRule, error) {
+// for this node. proxy actions route into the target chain composed locally
+// as detour-linked outbounds: a node that is itself hop k continues from hop
+// k+1 (the chain exit maps to direct); any other node dials the whole chain
+// from hop 0. Rules targeting a disabled or unresolvable chain are skipped.
+// process_name rules never apply on the agent side (subscription only).
+func (b *Builder) globalRouteRules(nodeID string, chains []store.ProxyChain, bindInterface string) ([]converter.RouteRule, []map[string]any, error) {
 	plans, err := b.Store.ListEnabledGlobalRoutePlans()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	out := []converter.RouteRule{}
+	outbounds := []map[string]any{}
+	exitTags := map[string]string{} // chain id -> composed exit tag
 	for _, plan := range plans {
 		for _, rule := range plan.Rules {
 			if !rule.Enabled {
@@ -267,43 +225,84 @@ func (b *Builder) globalRouteRules(nodeID string, chains []store.ProxyChain) ([]
 			case "block":
 				resolved.Reject = true
 			case "proxy":
-				outbound, ok := chainOutboundForNode(chains, rule.TargetChainID, nodeID)
+				tag, ok := exitTags[rule.TargetChainID]
 				if !ok {
-					log.Printf("debug: 节点 %s 不在代理链 %s 上，跳过全局路由计划 %q 的规则（%s %s）",
-						nodeID, rule.TargetChainID, plan.Name, rule.MatchType, rule.MatchValue)
-					continue
+					chain, found := findEnabledChain(chains, rule.TargetChainID)
+					if !found {
+						log.Printf("debug: 代理链 %s 未启用，跳过全局路由计划 %q 的规则（%s %s）",
+							rule.TargetChainID, plan.Name, rule.MatchType, rule.MatchValue)
+						continue
+					}
+					composed, exit, err := b.composeChainFrom(chain, chainStartForNode(chain, nodeID), bindInterface)
+					if err != nil {
+						return nil, nil, fmt.Errorf("全局路由计划 %q：%w", plan.Name, err)
+					}
+					outbounds = append(outbounds, composed...)
+					tag = exit
+					exitTags[rule.TargetChainID] = tag
 				}
-				resolved.Outbound = outbound
+				resolved.Outbound = tag
 			default:
 				continue
 			}
 			out = append(out, resolved)
 		}
 	}
-	return out, nil
+	return out, outbounds, nil
 }
 
-// chainOutboundForNode returns the outbound tag entering the chain from this
-// node's position: the next-hop tag for intermediate hops, "direct" for the
-// final hop (traffic has reached the chain exit). ok=false when the node is
-// not on the chain or the chain is missing from the effective set.
-func chainOutboundForNode(chains []store.ProxyChain, chainID, nodeID string) (string, bool) {
+func findEnabledChain(chains []store.ProxyChain, chainID string) (store.ProxyChain, bool) {
 	for _, chain := range chains {
-		if chain.ID != chainID || !chain.Enabled {
-			continue
+		if chain.ID == chainID && chain.Enabled {
+			return chain, true
 		}
-		for i, hop := range chain.Hops {
-			if hop.NodeID != nodeID {
-				continue
-			}
-			if i == len(chain.Hops)-1 {
-				return "direct", true
-			}
-			return ChainOutboundTag(chain.ID, i), true
-		}
-		return "", false
 	}
-	return "", false
+	return store.ProxyChain{}, false
+}
+
+// chainStartForNode returns the first hop this node must dial: the hop after
+// its own position when it is on the chain, otherwise the entry hop.
+func chainStartForNode(chain store.ProxyChain, nodeID string) int {
+	for i, hop := range chain.Hops {
+		if hop.NodeID == nodeID {
+			return i + 1
+		}
+	}
+	return 0
+}
+
+// composeChainFrom builds outbounds for hops [from, len(hops)) where each hop
+// dials through the previous one via detour. Only the first outbound dials
+// directly, so it alone carries bind_interface. It returns the exit tag, or
+// "direct" when from is past the last hop (this node is the chain exit).
+func (b *Builder) composeChainFrom(chain store.ProxyChain, from int, bindInterface string) ([]map[string]any, string, error) {
+	if from >= len(chain.Hops) {
+		return nil, "direct", nil
+	}
+	out := make([]map[string]any, 0, len(chain.Hops)-from)
+	previous := ""
+	for i := from; i < len(chain.Hops); i++ {
+		ep, err := b.ResolveHopEndpoint(chain, i)
+		if err != nil {
+			return nil, "", err
+		}
+		outbound, err := subscription.SingboxOutbound(ep)
+		if err != nil {
+			return nil, "", fmt.Errorf("代理链 %q 第 %d 跳的出站配置失败：%w", chain.Name, i+1, err)
+		}
+		tag := ChainOutboundTag(chain.ID, i)
+		outbound["tag"] = tag
+		if previous == "" {
+			if bindInterface != "" {
+				outbound["bind_interface"] = bindInterface
+			}
+		} else {
+			outbound["detour"] = previous
+		}
+		out = append(out, outbound)
+		previous = tag
+	}
+	return out, previous, nil
 }
 
 func (b *Builder) applyManagedTLS(nodeID string, inbounds []store.InboundConfig) ([]store.InboundConfig, error) {
@@ -495,10 +494,16 @@ func ChainOutboundTag(chainID string, position int) string {
 	if len(id) > 12 {
 		id = id[:12]
 	}
-	return fmt.Sprintf("chain-%s-hop-%d-next", id, position)
+	return fmt.Sprintf("chain-%s-hop-%d", id, position)
 }
 
-// ResolveHopEndpoint resolves the address and credentials used to reach a hop.
+// ResolveHopEndpoint resolves the address and credentials used to reach a hop
+// from its consumer (the client for hop zero, otherwise the previous hop).
+// The hop references a standalone binding, so NAT/FRP overrides come from
+// that binding. Address priority: hop dial_address → FRP server → managed TLS
+// hostname → binding public_address → node public_address → node address.
+// Port priority: hop dial_port → FRP remote port → binding public_port →
+// node port mapping of the listen port.
 func (b *Builder) ResolveHopEndpoint(chain store.ProxyChain, position int) (subscription.ProxyEndpoint, error) {
 	if position < 0 || position >= len(chain.Hops) {
 		return subscription.ProxyEndpoint{}, fmt.Errorf("代理链 %q 的跳点位置超出范围：%d", chain.Name, position+1)
@@ -508,15 +513,17 @@ func (b *Builder) ResolveHopEndpoint(chain store.ProxyChain, position int) (subs
 	if err != nil {
 		return subscription.ProxyEndpoint{}, err
 	}
-	in, err := b.Store.GetInbound(hop.InboundID)
+	att, err := b.Store.GetNodeInboundAttachment(hop.NodeID, hop.InboundID)
+	if err != nil {
+		return subscription.ProxyEndpoint{}, fmt.Errorf("代理链 %q 第 %d 跳：%w", chain.Name, position+1, err)
+	}
+	if !att.Enabled {
+		return subscription.ProxyEndpoint{}, fmt.Errorf("代理链 %q 第 %d 跳的入站已禁用", chain.Name, position+1)
+	}
+	in, managedHostname, managed, err := b.ResolveManagedTLS(hop.NodeID, att.EffectiveInbound())
 	if err != nil {
 		return subscription.ProxyEndpoint{}, err
 	}
-	resolvedInbound, managedHostname, managed, err := b.ResolveManagedTLS(hop.NodeID, *in)
-	if err != nil {
-		return subscription.ProxyEndpoint{}, err
-	}
-	in = &resolvedInbound
 	frp, frpEnabled, err := frpconnection.ParseParams(in.Params)
 	if err != nil {
 		return subscription.ProxyEndpoint{}, fmt.Errorf("代理链 %q 第 %d 跳：%w", chain.Name, position+1, err)
@@ -527,6 +534,9 @@ func (b *Builder) ResolveHopEndpoint(chain store.ProxyChain, position int) (subs
 	}
 	if address == "" && managed {
 		address = managedHostname
+	}
+	if address == "" {
+		address = strings.TrimSpace(att.PublicAddress)
 	}
 	if address == "" {
 		address = strings.TrimSpace(node.PublicAddress)
@@ -541,6 +551,9 @@ func (b *Builder) ResolveHopEndpoint(chain store.ProxyChain, position int) (subs
 	if port == 0 && frpEnabled {
 		port = frp.RemotePort
 	}
+	if port == 0 && att.PublicPort >= 1 && att.PublicPort <= 65535 {
+		port = att.PublicPort
+	}
 	if port == 0 {
 		listenPort, err := paramInt(in.Params, "port")
 		if err != nil || listenPort < 1 || listenPort > 65535 {
@@ -552,7 +565,7 @@ func (b *Builder) ResolveHopEndpoint(chain store.ProxyChain, position int) (subs
 	return subscription.ProxyEndpoint{
 		Name:          chain.Name,
 		Node:          *node,
-		Inbound:       *in,
+		Inbound:       in,
 		Server:        address,
 		Port:          port,
 		Protocol:      in.Protocol,

@@ -27,7 +27,7 @@ func SingboxVersion() string {
 	if constant.Version != "" && constant.Version != "unknown" {
 		return constant.Version
 	}
-	return "1.14.3"
+	return "1.14.4"
 }
 
 // BoxRuntime drives a single in-process sing-box instance (二开 adapter).

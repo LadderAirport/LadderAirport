@@ -3,7 +3,6 @@ import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
-import { StatusBadge } from '@/components/ui/status-badge'
 import { ConfirmModal } from '@/components/ui/confirm-modal'
 import {
   Dialog,
@@ -20,7 +19,6 @@ import {
   ArrowUp,
   CirclePlay,
   Edit,
-  Gauge,
   Link2,
   Loader2,
   Plus,
@@ -35,17 +33,17 @@ import {
   disableProxyChain,
   enableProxyChain,
   listInbounds,
+  listNodeInbounds,
   listNodes,
   listProxyChains,
-  probeProxyChain,
   updateProxyChain,
   type Node,
   type InboundConfig,
+  type NodeInboundAttachment,
   type ProxyChain,
   type ProxyChainHop,
   type ProxyChainInput,
 } from '../api/client'
-import { formatTime } from '../lib/nodeDisplay'
 import { toast } from '../lib/toast'
 
 type HopDraft = Omit<ProxyChainHop, 'chain_id' | 'position'>
@@ -62,6 +60,7 @@ export default function ProxyChains() {
   const [chains, setChains] = useState<ProxyChain[]>([])
   const [nodes, setNodes] = useState<Node[]>([])
   const [inbounds, setInbounds] = useState<InboundConfig[]>([])
+  const [bindings, setBindings] = useState<Map<string, NodeInboundAttachment[]>>(new Map())
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState('')
   const [pending, setPending] = useState<Set<string>>(new Set())
@@ -79,27 +78,12 @@ export default function ProxyChains() {
     [nodes],
   )
 
-  const inboundUsedByOtherChain = useMemo(() => {
-    const used = new Set<string>()
-    for (const chain of chains) {
-      if (editor.id && chain.id === editor.id) continue
-      for (const hop of chain.hops ?? []) {
-        if (hop.inbound_id) used.add(hop.inbound_id)
-      }
-    }
-    return used
-  }, [chains, editor.id])
-
-  function inboundOptionsForHop(currentInboundId: string) {
-    const selectedHere = new Set(
-      editor.hops.map((hop) => hop.inbound_id).filter((id) => id && id !== currentInboundId),
+  // Hops reference standalone bindings: only inbounds already attached to the
+  // chosen node are selectable (shared freely across chains).
+  function inboundOptionsForHop(nodeID: string, currentInboundId: string) {
+    return (bindings.get(nodeID) ?? []).filter(
+      (inbound) => inbound.id === currentInboundId || inbound.enabled,
     )
-    return inbounds.filter((inbound) => {
-      if (inbound.id === currentInboundId) return true
-      if (!inbound.enabled) return false
-      if (inboundUsedByOtherChain.has(inbound.id) || selectedHere.has(inbound.id)) return false
-      return true
-    })
   }
 
   const load = useCallback(async () => {
@@ -111,9 +95,15 @@ export default function ProxyChains() {
         listNodes(),
         listInbounds(),
       ])
+      const attached = await Promise.all(
+        (nextNodes ?? []).map(async (node) =>
+          [node.id, (await listNodeInbounds(node.id)) ?? []] as const,
+        ),
+      )
       setChains(nextChains ?? [])
       setNodes(nextNodes ?? [])
       setInbounds(nextInbounds ?? [])
+      setBindings(new Map(attached))
     } catch (err) {
       setLoadError(errorText(err, '代理链加载失败'))
     } finally {
@@ -227,7 +217,7 @@ export default function ProxyChains() {
           ? current.map((chain) => (chain.id === saved.id ? saved : chain))
           : [...current, saved],
       )
-      toast.success(editor.id ? '代理链已更新并重新部署' : '代理链已创建')
+      toast.success(editor.id ? '代理链已更新，客户端刷新订阅后生效' : '代理链已创建')
       setEditor((current) => ({ ...current, open: false }))
     } catch (err) {
       setEditorError(errorText(err, '保存代理链失败'))
@@ -238,7 +228,7 @@ export default function ProxyChains() {
 
   const [deleteTarget, setDeleteTarget] = useState<ProxyChain | null>(null)
 
-  async function operate(chain: ProxyChain, action: 'enable' | 'disable' | 'probe' | 'delete') {
+  async function operate(chain: ProxyChain, action: 'enable' | 'disable' | 'delete') {
     if (pending.has(chain.id)) return
     if (action === 'delete') {
       setDeleteTarget(chain)
@@ -246,22 +236,11 @@ export default function ProxyChains() {
     }
     setPending((current) => new Set(current).add(chain.id))
     try {
-      if (action === 'probe') {
-        const result = await probeProxyChain(chain.id)
-        if (result.ok) {
-          toast.success(`完整链路可用，延迟 ${result.delay_ms} ms`)
-        } else {
-          const hop = result.failed_hop_index >= 0 ? `，疑似第 ${result.failed_hop_index + 1} 跳` : ''
-          toast.error(`完整链路探测失败${hop}：${result.message || '未知错误'}`)
-        }
-        await refreshChain(chain.id)
-        return
-      }
       const updated = action === 'enable'
         ? await enableProxyChain(chain.id)
         : await disableProxyChain(chain.id)
       setChains((current) => current.map((item) => (item.id === updated.id ? updated : item)))
-      toast.success(action === 'enable' ? '代理链已部署并启用' : '代理链已停用')
+      toast.success(action === 'enable' ? '代理链已启用，客户端刷新订阅后生效' : '代理链已停用')
     } catch (err) {
       toast.error(errorText(err, `${actionText(action)}失败`))
       await refreshChain(chain.id).catch(() => undefined)
@@ -304,9 +283,9 @@ export default function ProxyChains() {
     <div className="space-y-6">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between border-b border-border pb-5">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight text-foreground">服务端代理链</h1>
+          <h1 className="text-2xl font-bold tracking-tight text-foreground">代理链</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            将 2–8 个 Agent 按顺序串联；客户端只连接入口节点，任一跳失败都会阻断流量
+            将 2–8 个已关联的节点入站按顺序串联，由客户端配置逐跳组合，任一跳失败都会阻断流量
           </p>
         </div>
         <div className="flex gap-2">
@@ -328,8 +307,9 @@ export default function ProxyChains() {
       <Alert variant="warning">
         <ShieldCheck className="h-4 w-4" />
         <AlertDescription className="text-xs">
-          启用前会检查所有 Agent 是否支持链式代理。部署按出口到入口逆序进行；失败时自动回滚已变更节点。
-          部署成功但数据探测失败时保留配置并标记为“降级”。
+          链路在订阅里组合：Clash / Mihomo 用 <code>dialer-proxy</code>，sing-box 用 <code>detour</code>，
+          第 N 跳经第 N−1 跳拨出；V2Ray 分享链接格式无法表达链路，会省略代理链。节点只运行普通入站，
+          启用、停用、修改链路都不会向节点下发配置（被全局路由计划引用时除外）。
         </AlertDescription>
       </Alert>
 
@@ -357,7 +337,9 @@ export default function ProxyChains() {
                     <div>
                       <div className="flex items-center gap-2">
                         <h2 className="font-semibold text-foreground">{chain.name}</h2>
-                        <StatusBadge value={chain.enabled ? chain.state : 'disabled'} />
+                        <Badge variant={chain.enabled ? 'success' : 'outline'} className={chain.enabled ? '' : 'text-muted-foreground'}>
+                          {chain.enabled ? '已启用' : '已停用'}
+                        </Badge>
                       </div>
                       <p className="text-[11px] text-muted-foreground mt-1 font-mono">{chain.hops.length} hops · {chain.id}</p>
                     </div>
@@ -388,22 +370,6 @@ export default function ProxyChains() {
                     ))}
                   </div>
 
-                  {(chain.last_probe_unix > 0 || chain.last_probe_error) && (
-                    <div className="rounded-md bg-background border border-border px-3 py-2 text-xs flex flex-wrap gap-x-4 gap-y-1">
-                      <span className="text-muted-foreground flex items-center gap-1">
-                        <Gauge className="h-3.5 w-3.5" />
-                        {chain.last_probe_delay_ms > 0 ? `${chain.last_probe_delay_ms} ms` : '无延迟数据'}
-                      </span>
-                      <span className="text-muted-foreground">{formatTime(chain.last_probe_unix)}</span>
-                      {chain.last_probe_error && (
-                        <span className="basis-full text-destructive">
-                          {chain.failed_hop_index >= 0 ? `疑似第 ${chain.failed_hop_index + 1} 跳：` : ''}
-                          {chain.last_probe_error}
-                        </span>
-                      )}
-                    </div>
-                  )}
-
                   <div className="flex flex-wrap gap-2 pt-1 border-t border-border">
                     {chain.enabled ? (
                       <Button size="sm" variant="outline" loading={busy} disabled={busy} onClick={() => void operate(chain, 'disable')} className="h-8 gap-1.5">
@@ -411,12 +377,9 @@ export default function ProxyChains() {
                       </Button>
                     ) : (
                       <Button size="sm" loading={busy} disabled={busy} onClick={() => void operate(chain, 'enable')} className="h-8 gap-1.5">
-                        <CirclePlay className="h-3.5 w-3.5" /> 部署并启用
+                        <CirclePlay className="h-3.5 w-3.5" /> 启用
                       </Button>
                     )}
-                    <Button size="sm" variant="outline" loading={busy} disabled={busy || !chain.enabled} onClick={() => void operate(chain, 'probe')} className="h-8 gap-1.5">
-                      <Gauge className="h-3.5 w-3.5" /> 完整链路探测
-                    </Button>
                   </div>
                 </CardContent>
               </Card>
@@ -465,15 +428,19 @@ export default function ProxyChains() {
                       </select>
                     </div>
                     <div className="space-y-1">
-                      <Label className="text-xs text-muted-foreground">链专用入站</Label>
+                      <Label className="text-xs text-muted-foreground">节点已关联的入站</Label>
                       <select
                         value={hop.inbound_id}
                         disabled={!hop.node_id}
                         onChange={(event) => updateHop(index, { inbound_id: event.target.value })}
                         className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground disabled:opacity-50"
                       >
-                        <option value="">请选择链专用入站…</option>
-                        {inboundOptionsForHop(hop.inbound_id).map((inbound) => (
+                        <option value="">
+                          {hop.node_id && inboundOptionsForHop(hop.node_id, hop.inbound_id).length === 0
+                            ? '该节点尚未关联可用入站'
+                            : '请选择入站…'}
+                        </option>
+                        {inboundOptionsForHop(hop.node_id, hop.inbound_id).map((inbound) => (
                           <option key={inbound.id} value={inbound.id}>
                             {inbound.name} ({inbound.protocol.toUpperCase()}
                             {inbound.enabled ? '' : ' · 已禁用'})
@@ -482,8 +449,10 @@ export default function ProxyChains() {
                       </select>
                     </div>
                     <div className="space-y-1">
-                      <Label className="text-xs text-muted-foreground">本跳接入地址（可选覆盖）</Label>
-                      <Input value={hop.dial_address} onChange={(event) => updateHop(index, { dial_address: event.target.value })} placeholder="留空使用本节点公网地址" />
+                      <Label className="text-xs text-muted-foreground">
+                        {index === 0 ? '客户端连接地址（可选覆盖）' : '上一跳连接地址（可选覆盖）'}
+                      </Label>
+                      <Input value={hop.dial_address} onChange={(event) => updateHop(index, { dial_address: event.target.value })} placeholder="留空使用入站关联的公网地址" />
                     </div>
                     <div className="space-y-1">
                       <Label className="text-xs text-muted-foreground">本跳接入端口（可选覆盖）</Label>
@@ -507,7 +476,7 @@ export default function ProxyChains() {
 
           <DialogFooter className="gap-2 sm:gap-0">
             <Button variant="outline" disabled={saving} onClick={() => setEditor((current) => ({ ...current, open: false }))} className="border-border">取消</Button>
-            <Button loading={saving} onClick={() => void save()}>{editor.id ? '保存并按需重新部署' : '创建代理链'}</Button>
+            <Button loading={saving} onClick={() => void save()}>{editor.id ? '保存' : '创建代理链'}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -530,8 +499,8 @@ function inboundName(inbounds: InboundConfig[] | undefined, id: string): string 
   return inbounds?.find((inbound) => inbound.id === id)?.name ?? id
 }
 
-function actionText(action: 'enable' | 'disable' | 'probe' | 'delete'): string {
-  return ({ enable: '启用代理链', disable: '停用代理链', probe: '探测代理链', delete: '删除代理链' })[action]
+function actionText(action: 'enable' | 'disable' | 'delete'): string {
+  return ({ enable: '启用代理链', disable: '停用代理链', delete: '删除代理链' })[action]
 }
 
 function errorText(err: unknown, fallback: string): string {

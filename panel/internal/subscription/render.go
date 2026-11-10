@@ -31,6 +31,12 @@ type ProxyEndpoint struct {
 	// (secure default); parsers set it explicitly from the source's
 	// allowInsecure / skip-cert-verify flag.
 	TLSSkipVerify *bool
+	// Detour names the endpoint this one dials through (proxy chains):
+	// Clash dialer-proxy / sing-box detour. Empty dials directly.
+	Detour string
+	// Hidden keeps an intermediate chain hop out of selectable groups; it is
+	// still emitted so the next hop can reference it.
+	Hidden bool
 }
 
 // clientServerHost returns the host clients should dial.
@@ -153,6 +159,9 @@ func RenderClashWithRules(endpoints []ProxyEndpoint, planRules []store.RoutePlan
 		p, err := clashProxy(ep)
 		if err != nil {
 			return nil, fmt.Errorf("%s：%w", ep.Name, err)
+		}
+		if ep.Detour != "" {
+			p["dialer-proxy"] = ep.Detour
 		}
 		// Prefer UDP on/off already set per protocol; force udp true when absent
 		// so merged external nodes behave like provider override: udp: true.
@@ -351,6 +360,9 @@ func clashProxyGroups(endpoints []ProxyEndpoint) []map[string]any {
 	order := make([]string, 0)
 	members := map[string][]string{}
 	for _, ep := range endpoints {
+		if ep.Hidden {
+			continue
+		}
 		g := strings.TrimSpace(ep.SourceName)
 		if g == "" {
 			g = clashGroupLocal
@@ -409,8 +421,13 @@ func RenderSingboxWithRules(endpoints []ProxyEndpoint, planRules []store.RoutePl
 		if err != nil {
 			return nil, fmt.Errorf("%s：%w", ep.Name, err)
 		}
+		if ep.Detour != "" {
+			ob["detour"] = ep.Detour
+		}
 		outbounds = append(outbounds, ob)
-		tags = append(tags, ep.Name)
+		if !ep.Hidden {
+			tags = append(tags, ep.Name)
+		}
 	}
 	selectorOutbounds := append([]string{}, tags...)
 	selectorOutbounds = append(selectorOutbounds, "direct")
@@ -702,7 +719,7 @@ func clashProxy(ep ProxyEndpoint) (map[string]any, error) {
 }
 
 // SingboxOutbound converts one normalized endpoint into a sing-box outbound.
-// It is also used by the server-side chain config builder.
+// It is also used by the node config builder to compose proxy chains.
 func SingboxOutbound(ep ProxyEndpoint) (map[string]any, error) {
 	o := map[string]any{
 		"tag":         ep.Name,

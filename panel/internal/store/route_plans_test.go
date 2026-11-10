@@ -213,6 +213,12 @@ func TestRoutePlanRuleChainRestrict(t *testing.T) {
 	if err := st.CreateInbound(inboundB); err != nil {
 		t.Fatal(err)
 	}
+	if err := st.SetNodeInbounds(nodeA.ID, []string{inboundA.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetNodeInbounds(nodeB.ID, []string{inboundB.ID}); err != nil {
+		t.Fatal(err)
+	}
 	chain := &ProxyChain{
 		Name: "chain-x",
 		Hops: []ProxyChainHop{

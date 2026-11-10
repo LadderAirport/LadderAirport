@@ -469,12 +469,8 @@ func scanNodeInboundTLSBindings(rows *sql.Rows) ([]NodeInboundTLSBinding, error)
 
 func (s *Store) NodeInboundPairExists(nodeID, inboundID string) (bool, error) {
 	var count int
-	err := s.db.QueryRow(`
-		SELECT
-			(SELECT COUNT(*) FROM node_inbounds WHERE node_id = ? AND inbound_id = ?)
-			+
-			(SELECT COUNT(*) FROM proxy_chain_hops WHERE node_id = ? AND inbound_id = ?)`,
-		nodeID, inboundID, nodeID, inboundID,
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM node_inbounds WHERE node_id = ? AND inbound_id = ?`,
+		nodeID, inboundID,
 	).Scan(&count)
 	if err != nil {
 		return false, fmt.Errorf("检查节点入站归属失败：%w", err)

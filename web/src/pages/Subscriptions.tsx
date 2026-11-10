@@ -868,7 +868,7 @@ export default function Subscriptions() {
                       {/* Content Aggregation Summary */}
                       <div className="grid grid-cols-2 gap-2 pt-3 border-t border-border text-xs">
                         <div className="space-y-0.5">
-                          <span className="text-[10px] text-muted-foreground block">服务端代理链</span>
+                          <span className="text-[10px] text-muted-foreground block">代理链</span>
                           <span className="text-foreground font-medium flex items-center gap-1">
                             <Server className="h-3 w-3 text-muted-foreground" />
                             {sub.include_all_chains
@@ -1117,8 +1117,8 @@ export default function Subscriptions() {
             <div className="space-y-2 pt-2 border-t border-border">
               <div className="flex items-center justify-between">
                 <div>
-                  <Label className="text-xs text-muted-foreground block">服务端代理链</Label>
-                  <p className="text-[10px] text-muted-foreground mt-0.5">客户端只连接链的入口，不会看到中间跳</p>
+                  <Label className="text-xs text-muted-foreground block">代理链</Label>
+                  <p className="text-[10px] text-muted-foreground mt-0.5">客户端按 dialer-proxy / detour 逐跳组合，V2Ray 链接格式不包含代理链</p>
                 </div>
                 <div className="flex items-center gap-2">
                   <Label htmlFor="sub-all-chains" className="text-[11px] text-muted-foreground">全部已启用链</Label>
@@ -1143,7 +1143,7 @@ export default function Subscriptions() {
                         />
                         <label htmlFor={`chain-${chain.id}`} className="text-foreground cursor-pointer flex-1">
                           {chain.name}
-                          <span className="text-muted-foreground ml-1">({chain.hops.length} 跳 · {chainStateText(chain.state)})</span>
+                          <span className="text-muted-foreground ml-1">({chain.hops.length} 跳 · {chain.enabled ? '已启用' : '已停用'})</span>
                         </label>
                       </div>
                     ))
@@ -1573,13 +1573,6 @@ function formatInterval(seconds: number): string {
     return `${seconds / 60} 分钟`
   }
   return `${seconds} 秒`
-}
-
-function chainStateText(state: string): string {
-  if (state === 'healthy') return '健康'
-  if (state === 'degraded') return '降级'
-  if (state === 'deploying') return '部署中'
-  return '已停用'
 }
 
 function errorText(err: unknown, fallback: string): string {

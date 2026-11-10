@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/ladderairport/panel/internal/store"
+	"github.com/ladderairport/panel/internal/subscription"
 )
 
 func (s *Server) handleListExternalSources(w http.ResponseWriter, r *http.Request) {
@@ -188,6 +189,9 @@ func (s *Server) handlePreviewExternalSource(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	eps, warnings := s.Aggregator.EndpointsForSources(r.Context(), []store.ExternalSource{*src})
+	// Mirror subscription rendering so the preview shows what clients get.
+	eps, dropped := subscription.MergeEndpointsWithReport(nil, eps)
+	warnings = append(warnings, subscription.DedupeWarnings(dropped)...)
 	names := make([]string, 0, len(eps))
 	for _, ep := range eps {
 		names = append(names, ep.Name)

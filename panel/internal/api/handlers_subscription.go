@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -421,28 +422,9 @@ func (s *Server) renderSubscription(ctx context.Context, sub *store.Subscription
 			}
 		}
 	}
-	if sub.IncludeAllChains || len(sub.ChainIDs) > 0 {
-		chains, err := s.Store.ListProxyChains()
-		if err != nil {
-			return nil, "", err
-		}
-		filter := map[string]bool{}
-		for _, id := range sub.ChainIDs {
-			filter[id] = true
-		}
-		builder := &nodeconfig.Builder{Store: s.Store}
-		for _, chain := range chains {
-			if !chain.Enabled || (!sub.IncludeAllChains && !filter[chain.ID]) {
-				continue
-			}
-			ep, err := builder.ResolveHopEndpoint(chain, 0)
-			if err != nil {
-				return nil, "", err
-			}
-			ep.Name = chain.Name
-			ep.SourceName = "链式代理"
-			local = append(local, ep)
-		}
+	chains, err := s.subscriptionChains(sub)
+	if err != nil {
+		return nil, "", err
 	}
 
 	var external []subscription.ProxyEndpoint
@@ -454,7 +436,12 @@ func (s *Server) renderSubscription(ctx context.Context, sub *store.Subscription
 		// EndpointsForSources soft-fails individual sources.
 		external, _ = s.Aggregator.EndpointsForSources(ctx, sources)
 	}
-	eps := subscription.MergeEndpointsContext(ctx, local, external)
+	eps, dropped := subscription.MergeEndpointsWithReport(local, external)
+	if len(dropped) > 0 {
+		log.Printf("订阅 %q：移除 %d 个配置重复的外部节点：%s",
+			sub.Name, len(dropped), strings.Join(subscription.DedupeWarnings(dropped), "；"))
+	}
+	eps = subscription.AppendChains(eps, chains)
 	if len(eps) == 0 {
 		return nil, "", fmt.Errorf("没有可用的代理端点，请检查节点地址、入站关联和外部源")
 	}
@@ -483,6 +470,40 @@ func (s *Server) renderSubscription(ctx context.Context, sub *store.Subscription
 		b, err := subscription.RenderV2ray(eps)
 		return b, "text/plain; charset=utf-8", err
 	}
+}
+
+// subscriptionChains resolves every hop of the enabled chains this
+// subscription exposes. The client composes them (dialer-proxy / detour), so
+// each hop resolves to the address its predecessor dials.
+func (s *Server) subscriptionChains(sub *store.Subscription) ([]subscription.Chain, error) {
+	if !sub.IncludeAllChains && len(sub.ChainIDs) == 0 {
+		return nil, nil
+	}
+	chains, err := s.Store.ListProxyChains()
+	if err != nil {
+		return nil, err
+	}
+	filter := map[string]bool{}
+	for _, id := range sub.ChainIDs {
+		filter[id] = true
+	}
+	builder := &nodeconfig.Builder{Store: s.Store}
+	out := []subscription.Chain{}
+	for _, chain := range chains {
+		if !chain.Enabled || (!sub.IncludeAllChains && !filter[chain.ID]) {
+			continue
+		}
+		composed := subscription.Chain{Name: chain.Name, Hops: make([]subscription.ProxyEndpoint, 0, len(chain.Hops))}
+		for i := range chain.Hops {
+			ep, err := builder.ResolveHopEndpoint(chain, i)
+			if err != nil {
+				return nil, err
+			}
+			composed.Hops = append(composed.Hops, ep)
+		}
+		out = append(out, composed)
+	}
+	return out, nil
 }
 
 // handleRotateSubscriptionToken issues a new subscription token, immediately

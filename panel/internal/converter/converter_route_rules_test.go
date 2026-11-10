@@ -42,16 +42,16 @@ func decodeRouteRules(t *testing.T, raw []byte) []map[string]any {
 	return out
 }
 
-func TestConvertRouteRulesAfterChainRules(t *testing.T) {
+func TestConvertRouteRulesTargetExtraOutbounds(t *testing.T) {
 	inbounds := []store.InboundConfig{testSSInbound("a1", 11001), testSSInbound("b2", 11002)}
 	chainOutbound := map[string]any{
-		"type": "shadowsocks", "tag": "chain-deadbeef-hop-0-next",
+		"type": "shadowsocks", "tag": "chain-deadbeef-hop-0",
 		"server": "198.51.100.2", "server_port": 443, "method": "aes-128-gcm", "password": "x",
 	}
 	raw, err := Convert(inbounds, ConvertOptions{
-		ChainRoutes: []ChainRoute{{InboundID: "b2", Outbound: chainOutbound}},
+		Outbounds: []map[string]any{chainOutbound},
 		RouteRules: []RouteRule{
-			{MatchType: "domain", MatchValue: "www.corp.example", Outbound: "chain-deadbeef-hop-0-next"},
+			{MatchType: "domain", MatchValue: "www.corp.example", Outbound: "chain-deadbeef-hop-0"},
 			{MatchType: "domain_suffix", MatchValue: "internal.example", Outbound: "direct"},
 			{MatchType: "ip_cidr", MatchValue: "203.0.113.0/24", Reject: true},
 			{MatchType: "process_name", MatchValue: "telegram", Outbound: "direct"}, // agent-side: skipped
@@ -63,50 +63,54 @@ func TestConvertRouteRulesAfterChainRules(t *testing.T) {
 		t.Fatal(err)
 	}
 	rules := decodeRouteRules(t, raw)
-	// 1 chain rule + 3 valid plan rules; process_name/dangling/empty skipped.
-	if len(rules) != 4 {
+	// 3 valid plan rules; process_name/dangling/empty skipped. No per-inbound
+	// chain rules: inbounds all egress through route.final.
+	if len(rules) != 3 {
 		t.Fatalf("rules = %v", rules)
 	}
-	// Chain rule stays first.
-	if rule := rules[0]; rule["action"] != "route" || rule["outbound"] != "chain-deadbeef-hop-0-next" {
-		t.Fatalf("chain rule = %v", rule)
+	for _, rule := range rules {
+		if _, ok := rule["inbound"]; ok {
+			t.Fatalf("no rule may match by inbound: %v", rule)
+		}
 	}
-	if in, ok := rules[0]["inbound"].([]any); !ok || len(in) != 1 {
-		t.Fatalf("chain rule inbound = %v", rules[0]["inbound"])
-	}
-	if rule := rules[1]; rule["action"] != "route" || rule["outbound"] != "chain-deadbeef-hop-0-next" {
+	if rule := rules[0]; rule["action"] != "route" || rule["outbound"] != "chain-deadbeef-hop-0" {
 		t.Fatalf("proxy plan rule = %v", rule)
 	}
-	if domains, ok := rules[1]["domain"].([]any); !ok || len(domains) != 1 || domains[0] != "www.corp.example" {
-		t.Fatalf("proxy plan rule domain = %v", rules[1]["domain"])
+	if domains, ok := rules[0]["domain"].([]any); !ok || len(domains) != 1 || domains[0] != "www.corp.example" {
+		t.Fatalf("proxy plan rule domain = %v", rules[0]["domain"])
 	}
-	if rule := rules[2]; rule["action"] != "route" || rule["outbound"] != "direct" {
+	if rule := rules[1]; rule["action"] != "route" || rule["outbound"] != "direct" {
 		t.Fatalf("direct plan rule = %v", rule)
 	}
-	if _, ok := rules[2]["domain_suffix"]; !ok {
-		t.Fatalf("direct plan rule condition = %v", rules[2])
+	if _, ok := rules[1]["domain_suffix"]; !ok {
+		t.Fatalf("direct plan rule condition = %v", rules[1])
 	}
-	if rule := rules[3]; rule["action"] != "reject" {
+	if rule := rules[2]; rule["action"] != "reject" {
 		t.Fatalf("block plan rule = %v", rule)
 	}
-	if _, hasOutbound := rules[3]["outbound"]; hasOutbound {
-		t.Fatalf("reject rule must not carry outbound: %v", rules[3])
+	if _, hasOutbound := rules[2]["outbound"]; hasOutbound {
+		t.Fatalf("reject rule must not carry outbound: %v", rules[2])
 	}
-	if _, ok := rules[3]["ip_cidr"]; !ok {
-		t.Fatalf("block plan rule condition = %v", rules[3])
+	if _, ok := rules[2]["ip_cidr"]; !ok {
+		t.Fatalf("block plan rule condition = %v", rules[2])
 	}
 }
 
 func TestConvertNodeDNSBlock(t *testing.T) {
 	inbounds := []store.InboundConfig{testSSInbound("a1", 11001)}
-	chainOutbound := map[string]any{
-		"type": "shadowsocks", "tag": "chain-next",
-		"server": "next.example", "server_port": 443, "method": "aes-128-gcm", "password": "x",
+	chainEntry := map[string]any{
+		"type": "shadowsocks", "tag": "chain-hop-0",
+		"server": "entry.example", "server_port": 443, "method": "aes-128-gcm", "password": "x",
+	}
+	chainExit := map[string]any{
+		"type": "shadowsocks", "tag": "chain-hop-1", "detour": "chain-hop-0",
+		"server": "exit.example", "server_port": 443, "method": "aes-128-gcm", "password": "y",
 	}
 	raw, err := Convert(inbounds, ConvertOptions{
 		BindInterface: "eth0",
-		ChainRoutes:   []ChainRoute{{InboundID: "a1", Outbound: chainOutbound}},
+		Outbounds:     []map[string]any{chainEntry, chainExit},
 		RouteRules: []RouteRule{
+			{MatchType: "domain", MatchValue: "corp.example", Outbound: "chain-hop-1"},
 			{MatchType: "ip_cidr", MatchValue: "203.0.113.0/24", Outbound: "direct"},
 			{MatchType: "domain_suffix", MatchValue: "example.com", Outbound: "direct"},
 		},
@@ -138,16 +142,20 @@ func TestConvertNodeDNSBlock(t *testing.T) {
 	if direct["bind_interface"] != "eth0" {
 		t.Fatalf("direct bind = %v", direct["bind_interface"])
 	}
-	chain := cfg["outbounds"].([]any)[1].(map[string]any)
-	resolver := chain["domain_resolver"].(map[string]any)
+	entry := cfg["outbounds"].([]any)[1].(map[string]any)
+	resolver := entry["domain_resolver"].(map[string]any)
 	if resolver["server"] != "doh-ali" || resolver["strategy"] != "ipv4_only" {
-		t.Fatalf("chain resolver = %v", resolver)
+		t.Fatalf("chain entry resolver = %v", resolver)
+	}
+	exit := cfg["outbounds"].([]any)[2].(map[string]any)
+	if _, ok := exit["domain_resolver"]; ok {
+		t.Fatalf("detoured hop must leave resolution to its upstream: %v", exit)
 	}
 	rules := decodeRouteRules(t, raw)
 	if rules[0]["action"] != "sniff" {
 		t.Fatalf("first rule = %v", rules[0])
 	}
-	if rules[1]["outbound"] != "chain-next" {
+	if rules[1]["outbound"] != "chain-hop-1" {
 		t.Fatalf("chain rule = %v", rules[1])
 	}
 	if _, ok := rules[2]["domain_suffix"]; !ok {

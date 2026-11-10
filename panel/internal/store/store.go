@@ -194,7 +194,6 @@ func (s *Store) migrate() error {
 			tls_skip_verify INTEGER NOT NULL DEFAULT 0,
 			PRIMARY KEY (chain_id, position),
 			UNIQUE (chain_id, node_id),
-			UNIQUE (node_id, inbound_id),
 			FOREIGN KEY (chain_id) REFERENCES proxy_chains(id) ON DELETE CASCADE,
 			FOREIGN KEY (node_id) REFERENCES nodes(id) ON DELETE RESTRICT,
 			FOREIGN KEY (inbound_id) REFERENCES inbounds(id) ON DELETE RESTRICT
@@ -562,9 +561,6 @@ func (s *Store) migrate() error {
 		`ALTER TABLE node_inbounds ADD COLUMN frp_enabled INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE node_inbounds ADD COLUMN frpc_config TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE settings ADD COLUMN public_base_url TEXT NOT NULL DEFAULT ''`,
-		`ALTER TABLE settings ADD COLUMN chain_probe_url TEXT NOT NULL DEFAULT 'https://www.gstatic.com/generate_204'`,
-		`ALTER TABLE settings ADD COLUMN chain_probe_interval_sec INTEGER NOT NULL DEFAULT 60`,
-		`ALTER TABLE settings ADD COLUMN chain_probe_timeout_sec INTEGER NOT NULL DEFAULT 10`,
 		`ALTER TABLE settings ADD COLUMN chain_subscription_migrated INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE settings ADD COLUMN session_version INTEGER NOT NULL DEFAULT 1`,
 		`ALTER TABLE settings ADD COLUMN trusted_proxy_cidrs TEXT NOT NULL DEFAULT ''`,
@@ -603,6 +599,9 @@ func (s *Store) migrate() error {
 			AND (json_type(params_json, '$.frp_enabled') IS NOT NULL OR json_type(params_json, '$.frpc_config') IS NOT NULL)`); err != nil {
 			return fmt.Errorf("清理旧入站 FRP 参数失败：%w", err)
 		}
+	}
+	if err := s.migrateClientSideChains(); err != nil {
+		return err
 	}
 	// v0.10.0 stored the provider zone in each managed domain and exposed a
 	// temporary test_zone setting. Preserve accounts that already manage one
@@ -1569,13 +1568,6 @@ func (s *Store) SetNodeInboundBindings(nodeID string, bindings []NodeInboundBind
 		if exists == 0 {
 			return fmt.Errorf("入站不存在：%s", iid)
 		}
-		if err := tx.QueryRow(`SELECT COUNT(*) FROM proxy_chain_hops WHERE node_id = ? AND inbound_id = ?`,
-			nodeID, iid).Scan(&exists); err != nil {
-			return err
-		}
-		if exists > 0 {
-			return fmt.Errorf("节点/入站已被代理链占用：%s/%s", nodeID, iid)
-		}
 		pubAddr := strings.TrimSpace(b.PublicAddress)
 		pubPort := b.PublicPort
 		if pubPort < 0 || pubPort > 65535 {
@@ -1588,7 +1580,31 @@ func (s *Store) SetNodeInboundBindings(nodeID string, bindings []NodeInboundBind
 			return fmt.Errorf("关联入站失败：%w", err)
 		}
 	}
+	if err := checkChainHopsBound(tx, nodeID); err != nil {
+		return err
+	}
 	return tx.Commit()
+}
+
+// checkChainHopsBound refuses to detach a binding that a proxy chain hop
+// still references; the chain would otherwise render an undeployed inbound.
+func checkChainHopsBound(tx *sql.Tx, nodeID string) error {
+	var chainName, inboundName string
+	err := tx.QueryRow(`
+		SELECT c.name, i.name FROM proxy_chain_hops h
+		JOIN proxy_chains c ON c.id = h.chain_id
+		JOIN inbounds i ON i.id = h.inbound_id
+		WHERE h.node_id = ? AND NOT EXISTS (
+			SELECT 1 FROM node_inbounds n WHERE n.node_id = h.node_id AND n.inbound_id = h.inbound_id
+		)
+		ORDER BY c.name LIMIT 1`, nodeID).Scan(&chainName, &inboundName)
+	if err == sql.ErrNoRows {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("检查代理链跳点关联失败：%w", err)
+	}
+	return fmt.Errorf("入站 %s 仍被代理链 %s 作为跳点引用，请先修改或删除该代理链", inboundName, chainName)
 }
 
 // ListInboundsForNode returns attached inbound configs (without NAT overrides).
@@ -1619,6 +1635,20 @@ func (s *Store) ListNodeInboundAttachments(nodeID string) ([]NodeInboundAttachme
 	}
 	defer rows.Close()
 	return scanNodeInboundAttachments(rows)
+}
+
+// GetNodeInboundAttachment returns one standalone binding with its NAT/FRP overrides.
+func (s *Store) GetNodeInboundAttachment(nodeID, inboundID string) (*NodeInboundAttachment, error) {
+	atts, err := s.ListNodeInboundAttachments(nodeID)
+	if err != nil {
+		return nil, err
+	}
+	for i := range atts {
+		if atts[i].ID == inboundID {
+			return &atts[i], nil
+		}
+	}
+	return nil, fmt.Errorf("入站 %s 未关联到节点 %s", inboundID, nodeID)
 }
 
 // ListAllNodeInboundAttachments returns attachments for every node in one
@@ -2098,13 +2128,11 @@ func (s *Store) GetSettings() (*Settings, error) {
 	var migrated int
 	err := s.db.QueryRow(`
 		SELECT admin_password_hash, default_agent_token, grpc_timeout_sec, max_concurrency,
-			listen_addr, public_base_url, chain_probe_url, chain_probe_interval_sec,
-			chain_probe_timeout_sec, chain_subscription_migrated, session_version,
+			listen_addr, public_base_url, chain_subscription_migrated, session_version,
 			trusted_proxy_cidrs
 		FROM settings WHERE id = 1`).Scan(
 		&st.AdminPasswordHash, &st.DefaultAgentToken, &st.GRPCTimeoutSec, &st.MaxConcurrency,
-		&st.ListenAddr, &st.PublicBaseURL, &st.ChainProbeURL, &st.ChainProbeIntervalSec,
-		&st.ChainProbeTimeoutSec, &migrated, &st.SessionVersion, &st.TrustedProxyCIDRs,
+		&st.ListenAddr, &st.PublicBaseURL, &migrated, &st.SessionVersion, &st.TrustedProxyCIDRs,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("读取系统设置失败：%w", err)
@@ -2125,15 +2153,11 @@ func (s *Store) SaveSettings(st *Settings) error {
 			max_concurrency = ?,
 			listen_addr = ?,
 			public_base_url = ?,
-			chain_probe_url = ?,
-			chain_probe_interval_sec = ?,
-			chain_probe_timeout_sec = ?,
 			chain_subscription_migrated = ?,
 			trusted_proxy_cidrs = ?
 		WHERE id = 1`,
 		st.AdminPasswordHash, st.DefaultAgentToken, st.GRPCTimeoutSec, st.MaxConcurrency,
-		st.ListenAddr, st.PublicBaseURL, st.ChainProbeURL, st.ChainProbeIntervalSec,
-		st.ChainProbeTimeoutSec, boolToInt(st.ChainSubscriptionMigrated), st.TrustedProxyCIDRs,
+		st.ListenAddr, st.PublicBaseURL, boolToInt(st.ChainSubscriptionMigrated), st.TrustedProxyCIDRs,
 	)
 	if err != nil {
 		return fmt.Errorf("保存系统设置失败：%w", err)
@@ -2152,36 +2176,6 @@ func (s *Store) BumpSessionVersion() (int64, error) {
 		return 0, fmt.Errorf("读取会话版本失败：%w", err)
 	}
 	return version, nil
-}
-
-// MigrateSubscriptionsToChains switches subscriptions that currently expose
-// local standalone endpoints to all enabled chains. It is intentionally
-// one-shot and leaves external-only subscriptions untouched.
-func (s *Store) MigrateSubscriptionsToChains() error {
-	tx, err := s.db.Begin()
-	if err != nil {
-		return err
-	}
-	defer func() { _ = tx.Rollback() }()
-	var migrated int
-	if err := tx.QueryRow(`SELECT chain_subscription_migrated FROM settings WHERE id = 1`).Scan(&migrated); err != nil {
-		return err
-	}
-	if migrated != 0 {
-		return nil
-	}
-	if _, err := tx.Exec(`
-		UPDATE subscriptions
-		SET include_standalone = 0, include_all_chains = 1, chain_ids_json = '[]',
-			updated_at_unix = ?
-		WHERE COALESCE(include_all_inbounds, 1) = 1
-		   OR TRIM(inbound_ids_json) NOT IN ('', '[]', 'null')`, nowUnix()); err != nil {
-		return err
-	}
-	if _, err := tx.Exec(`UPDATE settings SET chain_subscription_migrated = 1 WHERE id = 1`); err != nil {
-		return err
-	}
-	return tx.Commit()
 }
 
 // --- Subscriptions ---
@@ -2652,6 +2646,64 @@ func scanExternalSource(row interface {
 
 // --- Proxy chains ---
 
+// migrateClientSideChains converts the legacy server-relayed chain schema,
+// where hops owned their node/inbound pair exclusively, to client-side
+// composition where hops reference standalone bindings. It runs once: the
+// legacy schema is detected by its UNIQUE (node_id, inbound_id) constraint.
+// Legacy hops become standalone bindings (carrying template-level FRP), so
+// the inbounds stay deployed after the next config push.
+func (s *Store) migrateClientSideChains() error {
+	var ddl string
+	if err := s.db.QueryRow(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'proxy_chain_hops'`).Scan(&ddl); err != nil {
+		return fmt.Errorf("检查代理链跳点表失败：%w", err)
+	}
+	if !strings.Contains(strings.Join(strings.Fields(ddl), " "), "UNIQUE (node_id, inbound_id)") {
+		return nil
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	stmts := []string{
+		`INSERT OR IGNORE INTO node_inbounds (node_id, inbound_id, public_address, public_port, frp_enabled, frpc_config)
+		SELECT h.node_id, h.inbound_id, '', 0,
+			CASE WHEN json_valid(i.params_json) AND json_extract(i.params_json, '$.frp_enabled') = 1 THEN 1 ELSE 0 END,
+			CASE WHEN json_valid(i.params_json) THEN COALESCE(json_extract(i.params_json, '$.frpc_config'), '') ELSE '' END
+		FROM proxy_chain_hops h JOIN inbounds i ON i.id = h.inbound_id`,
+		`UPDATE inbounds SET params_json = json_remove(params_json, '$.frp_enabled', '$.frpc_config')
+		WHERE json_valid(params_json) AND id IN (SELECT inbound_id FROM proxy_chain_hops)
+			AND (json_type(params_json, '$.frp_enabled') IS NOT NULL OR json_type(params_json, '$.frpc_config') IS NOT NULL)`,
+		`CREATE TABLE proxy_chain_hops_v2 (
+			chain_id TEXT NOT NULL,
+			position INTEGER NOT NULL,
+			node_id TEXT NOT NULL,
+			inbound_id TEXT NOT NULL,
+			dial_address TEXT NOT NULL DEFAULT '',
+			dial_port INTEGER NOT NULL DEFAULT 0,
+			tls_skip_verify INTEGER NOT NULL DEFAULT 0,
+			PRIMARY KEY (chain_id, position),
+			UNIQUE (chain_id, node_id),
+			FOREIGN KEY (chain_id) REFERENCES proxy_chains(id) ON DELETE CASCADE,
+			FOREIGN KEY (node_id) REFERENCES nodes(id) ON DELETE RESTRICT,
+			FOREIGN KEY (inbound_id) REFERENCES inbounds(id) ON DELETE RESTRICT
+		)`,
+		`INSERT INTO proxy_chain_hops_v2
+			(chain_id, position, node_id, inbound_id, dial_address, dial_port, tls_skip_verify)
+		SELECT chain_id, position, node_id, inbound_id, dial_address, dial_port, tls_skip_verify
+		FROM proxy_chain_hops`,
+		`DROP TABLE proxy_chain_hops`,
+		`ALTER TABLE proxy_chain_hops_v2 RENAME TO proxy_chain_hops`,
+		`UPDATE proxy_chains SET state = CASE WHEN enabled = 1 THEN 'enabled' ELSE 'disabled' END`,
+	}
+	for _, stmt := range stmts {
+		if _, err := tx.Exec(stmt); err != nil {
+			return fmt.Errorf("迁移代理链为客户端组合失败：%w", err)
+		}
+	}
+	return tx.Commit()
+}
+
 func validateProxyChain(c *ProxyChain) error {
 	if c == nil {
 		return fmt.Errorf("代理链不能为空")
@@ -2705,15 +2757,8 @@ func (s *Store) validateProxyChainRefs(tx *sql.Tx, c *ProxyChain) error {
 			h.NodeID, h.InboundID).Scan(&exists); err != nil {
 			return err
 		}
-		if exists > 0 {
-			return fmt.Errorf("第 %d 跳的节点/入站已经是独立绑定", i+1)
-		}
-		if err := tx.QueryRow(`SELECT COUNT(*) FROM proxy_chain_hops WHERE node_id = ? AND inbound_id = ? AND chain_id <> ?`,
-			h.NodeID, h.InboundID, c.ID).Scan(&exists); err != nil {
-			return err
-		}
-		if exists > 0 {
-			return fmt.Errorf("第 %d 跳的节点/入站已被另一条代理链占用", i+1)
+		if exists == 0 {
+			return fmt.Errorf("第 %d 跳的入站尚未关联到该节点，请先在节点上关联此入站", i+1)
 		}
 	}
 	return nil
@@ -2764,9 +2809,6 @@ func (s *Store) CreateProxyChain(c *ProxyChain) error {
 	}
 	now := nowUnix()
 	c.CreatedAtUnix, c.UpdatedAtUnix = now, now
-	c.Enabled = false
-	c.State = "disabled"
-	c.FailedHopIndex = -1
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
@@ -2777,8 +2819,8 @@ func (s *Store) CreateProxyChain(c *ProxyChain) error {
 	}
 	if _, err := tx.Exec(`
 		INSERT INTO proxy_chains
-			(id, name, enabled, state, failed_hop_index, created_at_unix, updated_at_unix)
-		VALUES (?, ?, 0, 'disabled', -1, ?, ?)`, c.ID, c.Name, now, now); err != nil {
+			(id, name, enabled, state, created_at_unix, updated_at_unix)
+		VALUES (?, ?, ?, ?, ?, ?)`, c.ID, c.Name, boolToInt(c.Enabled), proxyChainState(c.Enabled), now, now); err != nil {
 		return fmt.Errorf("创建代理链失败：%w", err)
 	}
 	if err := insertProxyChainHops(tx, c); err != nil {
@@ -2787,8 +2829,7 @@ func (s *Store) CreateProxyChain(c *ProxyChain) error {
 	return tx.Commit()
 }
 
-// UpdateProxyChain replaces metadata and ordered hops. Runtime fields are
-// preserved unless supplied by SetProxyChainRuntime.
+// UpdateProxyChain replaces name, enabled flag and ordered hops.
 func (s *Store) UpdateProxyChain(c *ProxyChain) error {
 	if err := validateProxyChain(c); err != nil {
 		return err
@@ -2813,7 +2854,7 @@ func (s *Store) UpdateProxyChain(c *ProxyChain) error {
 	}
 	now := nowUnix()
 	res, err := tx.Exec(`UPDATE proxy_chains SET name = ?, enabled = ?, state = ?, updated_at_unix = ? WHERE id = ?`,
-		c.Name, boolToInt(c.Enabled), firstNonEmptyString(c.State, existing.State), now, c.ID)
+		c.Name, boolToInt(c.Enabled), proxyChainState(c.Enabled), now, c.ID)
 	if err != nil {
 		return fmt.Errorf("更新代理链失败：%w", err)
 	}
@@ -2825,24 +2866,18 @@ func (s *Store) UpdateProxyChain(c *ProxyChain) error {
 	return tx.Commit()
 }
 
-func firstNonEmptyString(values ...string) string {
-	for _, value := range values {
-		if value != "" {
-			return value
-		}
+// proxyChainState keeps the legacy state column meaningful for downgrades.
+func proxyChainState(enabled bool) string {
+	if enabled {
+		return "enabled"
 	}
-	return ""
+	return "disabled"
 }
 
 func scanProxyChain(row interface{ Scan(dest ...any) error }) (*ProxyChain, error) {
 	var c ProxyChain
 	var enabled int
-	err := row.Scan(
-		&c.ID, &c.Name, &enabled, &c.State,
-		&c.LastDeployUnix, &c.LastDeployError,
-		&c.LastProbeUnix, &c.LastProbeDelayMS, &c.LastProbeError, &c.FailedHopIndex,
-		&c.CreatedAtUnix, &c.UpdatedAtUnix,
-	)
+	err := row.Scan(&c.ID, &c.Name, &enabled, &c.CreatedAtUnix, &c.UpdatedAtUnix)
 	if err != nil {
 		return nil, err
 	}
@@ -2851,10 +2886,7 @@ func scanProxyChain(row interface{ Scan(dest ...any) error }) (*ProxyChain, erro
 	return &c, nil
 }
 
-const proxyChainSelectCols = `id, name, enabled, state,
-	last_deploy_unix, last_deploy_error,
-	last_probe_unix, last_probe_delay_ms, last_probe_error, failed_hop_index,
-	created_at_unix, updated_at_unix`
+const proxyChainSelectCols = `id, name, enabled, created_at_unix, updated_at_unix`
 
 func (s *Store) loadProxyChainHops(c *ProxyChain) error {
 	rows, err := s.db.Query(`
@@ -2919,12 +2951,11 @@ func (s *Store) ListProxyChains() ([]ProxyChain, error) {
 	return out, nil
 }
 
-func (s *Store) SetProxyChainRuntime(id string, enabled bool, state, deployErr string) error {
-	now := nowUnix()
-	res, err := s.db.Exec(`
-		UPDATE proxy_chains
-		SET enabled = ?, state = ?, last_deploy_unix = ?, last_deploy_error = ?, updated_at_unix = ?
-		WHERE id = ?`, boolToInt(enabled), state, now, deployErr, now, id)
+// SetProxyChainEnabled toggles whether the chain is rendered into
+// subscriptions and composed by global route plans.
+func (s *Store) SetProxyChainEnabled(id string, enabled bool) error {
+	res, err := s.db.Exec(`UPDATE proxy_chains SET enabled = ?, state = ?, updated_at_unix = ? WHERE id = ?`,
+		boolToInt(enabled), proxyChainState(enabled), nowUnix(), id)
 	if err != nil {
 		return err
 	}
@@ -2932,23 +2963,6 @@ func (s *Store) SetProxyChainRuntime(id string, enabled bool, state, deployErr s
 		return fmt.Errorf("代理链不存在：%s", id)
 	}
 	return nil
-}
-
-func (s *Store) SetProxyChainProbe(id string, ok bool, delayMS int, message string, failedHop int) error {
-	state := "degraded"
-	if ok {
-		state = "healthy"
-		message = ""
-		failedHop = -1
-	}
-	now := nowUnix()
-	_, err := s.db.Exec(`
-		UPDATE proxy_chains
-		SET state = ?, last_probe_unix = ?, last_probe_delay_ms = ?,
-			last_probe_error = ?, failed_hop_index = ?, updated_at_unix = ?
-		WHERE id = ? AND enabled = 1`,
-		state, now, delayMS, message, failedHop, now, id)
-	return err
 }
 
 func (s *Store) DeleteProxyChain(id string) error {

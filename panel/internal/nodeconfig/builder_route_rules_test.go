@@ -28,7 +28,7 @@ func addNodeWithInbound(t *testing.T, st *store.Store, name, address string, por
 }
 
 // addNodeAndInbound creates the node and inbound without a standalone
-// attachment (chain hops may not reuse standalone-bound inbounds).
+// attachment.
 func addNodeAndInbound(t *testing.T, st *store.Store, name, address string, port int) (store.Node, store.InboundConfig) {
 	t.Helper()
 	node := &store.Node{Name: name, Address: address, GRPCPort: 50051, Status: "online"}
@@ -45,23 +45,22 @@ func addNodeAndInbound(t *testing.T, st *store.Store, name, address string, port
 	return *node, *inbound
 }
 
-func TestGlobalRouteRulesResolution(t *testing.T) {
+func TestGlobalRouteRulesComposeChainWithDetour(t *testing.T) {
 	st := openRouteRuleStore(t)
-	nodeA, inA := addNodeAndInbound(t, st, "a", "192.0.2.1", 11001)
-	nodeB, inB := addNodeAndInbound(t, st, "b", "192.0.2.2", 11002)
-	nodeC, _ := addNodeAndInbound(t, st, "c", "192.0.2.3", 11003)
+	nodeA, inA := addNodeWithInbound(t, st, "a", "192.0.2.1", 11001)
+	nodeB, inB := addNodeWithInbound(t, st, "b", "192.0.2.2", 11002)
+	nodeC, _ := addNodeWithInbound(t, st, "c", "192.0.2.3", 11003)
 
 	chain := &store.ProxyChain{
 		Name: "res-chain",
 		Hops: []store.ProxyChainHop{
 			{NodeID: nodeA.ID, InboundID: inA.ID},
-			{NodeID: nodeB.ID, InboundID: inB.ID},
+			{NodeID: nodeB.ID, InboundID: inB.ID, DialAddress: "10.0.0.2"},
 		},
 	}
 	if err := st.CreateProxyChain(chain); err != nil {
 		t.Fatal(err)
 	}
-	// The effective chain set passed to the builder treats the chain as enabled.
 	chain.Enabled = true
 	plan := &store.RoutePlan{
 		Name: "g", Scope: "global", Enabled: true,
@@ -71,12 +70,12 @@ func TestGlobalRouteRulesResolution(t *testing.T) {
 			{MatchType: "ip_cidr", MatchValue: "198.51.100.0/24", Action: "block", Enabled: true},
 			{MatchType: "process_name", MatchValue: "ssh", Action: "direct", Enabled: true},
 			{MatchType: "domain", MatchValue: "off.example", Action: "direct", Enabled: false},
+			{MatchType: "domain_suffix", MatchValue: "again.example", Action: "proxy", TargetChainID: chain.ID, Enabled: true},
 		},
 	}
 	if err := st.CreateRoutePlan(plan); err != nil {
 		t.Fatal(err)
 	}
-	// A disabled plan must not contribute rules.
 	disabled := &store.RoutePlan{
 		Name: "off", Scope: "global", Enabled: false,
 		Rules: []store.RoutePlanRule{
@@ -89,43 +88,105 @@ func TestGlobalRouteRulesResolution(t *testing.T) {
 
 	builder := &Builder{Store: st}
 	chains := []store.ProxyChain{*chain}
+	exitTag := ChainOutboundTag(chain.ID, 1)
 
-	// First hop: proxy rule targets the chain next-hop outbound.
-	rules, err := builder.globalRouteRules(nodeA.ID, chains)
+	// Entry hop continues from the next hop: one outbound, dialed directly.
+	rules, outbounds, err := builder.globalRouteRules(nodeA.ID, chains, "eth1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rules) != 3 {
+	if len(rules) != 4 || rules[0].Outbound != exitTag || rules[3].Outbound != exitTag {
 		t.Fatalf("nodeA rules = %+v", rules)
 	}
-	if rules[0].Outbound != ChainOutboundTag(chain.ID, 0) || rules[0].Reject {
-		t.Fatalf("nodeA rule[0] = %+v", rules[0])
-	}
-	if rules[1].Outbound != "direct" || rules[2].Outbound != "" || !rules[2].Reject {
+	if rules[1].Outbound != "direct" || !rules[2].Reject {
 		t.Fatalf("nodeA rules = %+v", rules)
 	}
+	if len(outbounds) != 1 {
+		t.Fatalf("nodeA outbounds = %+v (the chain must be composed once)", outbounds)
+	}
+	if outbounds[0]["server"] != "10.0.0.2" || outbounds[0]["bind_interface"] != "eth1" {
+		t.Fatalf("nodeA next hop = %+v", outbounds[0])
+	}
+	if _, ok := outbounds[0]["detour"]; ok {
+		t.Fatalf("first composed hop must dial directly: %+v", outbounds[0])
+	}
 
-	// Last hop (chain exit): proxy rule degrades to direct.
-	rules, err = builder.globalRouteRules(nodeB.ID, chains)
+	// Exit hop: proxy degrades to direct, nothing composed.
+	rules, outbounds, err = builder.globalRouteRules(nodeB.ID, chains, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rules) != 3 || rules[0].Outbound != "direct" {
-		t.Fatalf("nodeB rules = %+v", rules)
+	if len(rules) != 4 || rules[0].Outbound != "direct" || len(outbounds) != 0 {
+		t.Fatalf("nodeB rules = %+v outbounds = %+v", rules, outbounds)
 	}
 
-	// Node not on the chain: the proxy rule is skipped, the rest stay.
-	rules, err = builder.globalRouteRules(nodeC.ID, chains)
+	// Off-chain node dials the whole chain: entry direct, exit via detour.
+	rules, outbounds, err = builder.globalRouteRules(nodeC.ID, chains, "eth1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rules) != 2 {
+	if len(rules) != 4 || rules[0].Outbound != exitTag {
 		t.Fatalf("nodeC rules = %+v", rules)
 	}
-	for _, rule := range rules {
-		if rule.MatchValue == "corp.example" {
-			t.Fatalf("nodeC should skip chain rule: %+v", rules)
-		}
+	if len(outbounds) != 2 {
+		t.Fatalf("nodeC outbounds = %+v", outbounds)
+	}
+	entry, exit := outbounds[0], outbounds[1]
+	if entry["tag"] != ChainOutboundTag(chain.ID, 0) || entry["server"] != "192.0.2.1" || entry["bind_interface"] != "eth1" {
+		t.Fatalf("nodeC entry = %+v", entry)
+	}
+	if exit["tag"] != exitTag || exit["detour"] != entry["tag"] || exit["server"] != "10.0.0.2" {
+		t.Fatalf("nodeC exit = %+v", exit)
+	}
+	if _, ok := exit["bind_interface"]; ok {
+		t.Fatalf("detoured hop must not carry dial fields: %+v", exit)
+	}
+
+	// Disabled chain: the proxy rule is skipped.
+	chains[0].Enabled = false
+	rules, outbounds, err = builder.globalRouteRules(nodeC.ID, chains, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rules) != 2 || len(outbounds) != 0 {
+		t.Fatalf("disabled chain rules = %+v outbounds = %+v", rules, outbounds)
+	}
+}
+
+func TestBuildDoesNotDeployChainHops(t *testing.T) {
+	st := openRouteRuleStore(t)
+	nodeA, inA := addNodeWithInbound(t, st, "a", "192.0.2.1", 11001)
+	nodeB, inB := addNodeWithInbound(t, st, "b", "192.0.2.2", 11002)
+	chain := &store.ProxyChain{
+		Name: "plain",
+		Hops: []store.ProxyChainHop{
+			{NodeID: nodeA.ID, InboundID: inA.ID},
+			{NodeID: nodeB.ID, InboundID: inB.ID},
+		},
+	}
+	if err := st.CreateProxyChain(chain); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetProxyChainEnabled(chain.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	result, err := (&Builder{Store: st}).Build(nodeA.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg struct {
+		Inbounds  []map[string]any `json:"inbounds"`
+		Outbounds []map[string]any `json:"outbounds"`
+		Route     map[string]any   `json:"route"`
+	}
+	if err := json.Unmarshal([]byte(result.JSON), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Inbounds) != 1 || len(cfg.Outbounds) != 1 || cfg.Outbounds[0]["tag"] != "direct" {
+		t.Fatalf("chain without a global plan must not change the node: %s", result.JSON)
+	}
+	if _, ok := cfg.Route["rules"]; ok {
+		t.Fatalf("no route rules expected: %v", cfg.Route)
 	}
 }
 

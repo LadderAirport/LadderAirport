@@ -1,32 +1,15 @@
 package api
 
 import (
-	"context"
-	"encoding/json"
 	"net/http"
-	"sync"
-	"time"
 
-	"github.com/ladderairport/panel/internal/nodeconfig"
-	"github.com/ladderairport/panel/internal/proxychain"
 	"github.com/ladderairport/panel/internal/store"
 )
 
-func (s *Server) chainService() *proxychain.Service {
-	s.chainsOnce.Do(func() {
-		if s.Chains != nil {
-			return
-		}
-		var builder = (*nodeconfig.Builder)(nil)
-		var coordinator = (*sync.Mutex)(nil)
-		if s.Runner != nil {
-			builder = s.Runner.ConfigBuilder
-			coordinator = s.Runner.Coordinator
-		}
-		s.Chains = proxychain.NewService(s.Store, builder, coordinator)
-	})
-	return s.Chains
-}
+// Proxy chains are composed client-side (Clash dialer-proxy / sing-box
+// detour) from standalone bindings, so CRUD and enable/disable are pure data
+// changes. Nodes only need a re-push when an enabled global route plan
+// proxies through the chain (nodes compose it locally as detour outbounds).
 
 func (s *Server) handleListProxyChains(w http.ResponseWriter, _ *http.Request) {
 	chains, err := s.Store.ListProxyChains()
@@ -52,6 +35,7 @@ func (s *Server) handleCreateProxyChain(w http.ResponseWriter, r *http.Request) 
 		writeDecodeError(w, err)
 		return
 	}
+	chain.ID = ""
 	if err := s.Store.CreateProxyChain(&chain); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -73,21 +57,18 @@ func (s *Server) handleUpdateProxyChain(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	candidate.ID = id
+	// Enabled is toggled only through the enable/disable endpoints.
+	candidate.Enabled = existing.Enabled
+	if err := s.Store.ValidateProxyChain(&candidate); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := s.Store.UpdateProxyChain(&candidate); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	if existing.Enabled {
-		candidate.Enabled = true
-		ctx, cancel := s.chainOperationContext(r)
-		defer cancel()
-		if err := s.chainService().Deploy(ctx, candidate); err != nil {
-			writeError(w, http.StatusBadGateway, err.Error())
-			return
-		}
-	} else {
-		candidate.Enabled = false
-		candidate.State = "disabled"
-		if err := s.Store.UpdateProxyChain(&candidate); err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
+		s.reapplyForChainChange(r, id)
 	}
 	updated, _ := s.Store.GetProxyChain(id)
 	writeJSON(w, http.StatusOK, updated)
@@ -102,71 +83,52 @@ func (s *Server) handleDeleteProxyChain(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Server) handleEnableProxyChain(w http.ResponseWriter, r *http.Request) {
-	chain, err := s.Store.GetProxyChain(pathID(r))
+	s.setProxyChainEnabled(w, r, true)
+}
+
+func (s *Server) handleDisableProxyChain(w http.ResponseWriter, r *http.Request) {
+	s.setProxyChainEnabled(w, r, false)
+}
+
+func (s *Server) setProxyChainEnabled(w http.ResponseWriter, r *http.Request, enabled bool) {
+	id := pathID(r)
+	chain, err := s.Store.GetProxyChain(id)
 	if err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
-	ctx, cancel := s.chainOperationContext(r)
-	defer cancel()
-	if err := s.chainService().Deploy(ctx, *chain); err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
-		return
+	if enabled {
+		// Bindings may have changed since the chain was saved.
+		if err := s.Store.ValidateProxyChain(chain); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 	}
-	updated, _ := s.Store.GetProxyChain(chain.ID)
+	if chain.Enabled != enabled {
+		if err := s.Store.SetProxyChainEnabled(id, enabled); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		s.reapplyForChainChange(r, id)
+	}
+	updated, _ := s.Store.GetProxyChain(id)
 	writeJSON(w, http.StatusOK, updated)
 }
 
-func (s *Server) handleDisableProxyChain(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := s.chainOperationContext(r)
-	defer cancel()
-	if err := s.chainService().Disable(ctx, pathID(r)); err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
-		return
-	}
-	updated, _ := s.Store.GetProxyChain(pathID(r))
-	writeJSON(w, http.StatusOK, updated)
-}
-
-func (s *Server) handleProbeProxyChain(w http.ResponseWriter, r *http.Request) {
-	settings, _ := s.Store.GetSettings()
-	timeout := 10 * time.Second
-	if settings != nil && settings.ChainProbeTimeoutSec > 0 {
-		timeout = time.Duration(settings.ChainProbeTimeoutSec) * time.Second
-	}
-	ctx, cancel := context.WithTimeout(r.Context(), timeout)
-	defer cancel()
-	result, err := s.chainService().Probe(ctx, pathID(r))
+// reapplyForChainChange re-pushes every node when an enabled global route
+// plan proxies through the chain, since any node may compose it locally.
+// Best-effort, like reapplyForRoutePlanChange.
+func (s *Server) reapplyForChainChange(r *http.Request, chainID string) {
+	plans, err := s.Store.ListEnabledGlobalRoutePlans()
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, result)
-}
-
-func (s *Server) handlePreviewProxyChain(w http.ResponseWriter, r *http.Request) {
-	var candidate store.ProxyChain
-	if err := decodeJSON(w, r, &candidate); err != nil {
-		writeDecodeError(w, err)
-		return
+	for i := range plans {
+		for _, rule := range plans[i].Rules {
+			if rule.Enabled && rule.Action == "proxy" && rule.TargetChainID == chainID {
+				s.reapplyForRoutePlanChange(r, nil, &plans[i])
+				return
+			}
+		}
 	}
-	configs, err := s.chainService().Preview(candidate)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	out := map[string]json.RawMessage{}
-	for nodeID, cfg := range configs {
-		out[nodeID] = json.RawMessage(cfg.JSON)
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"configs": out})
-}
-
-func (s *Server) chainOperationContext(r *http.Request) (context.Context, context.CancelFunc) {
-	settings, _ := s.Store.GetSettings()
-	perHop := 10
-	if settings != nil && settings.GRPCTimeoutSec > 0 {
-		perHop = settings.GRPCTimeoutSec
-	}
-	return context.WithTimeout(r.Context(), time.Duration(perHop*24)*time.Second)
 }

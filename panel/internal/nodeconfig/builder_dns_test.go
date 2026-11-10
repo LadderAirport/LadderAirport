@@ -78,8 +78,8 @@ func TestBuildEmitsFailoverOn114(t *testing.T) {
 
 func TestBuildEmitsPerNodeDNS(t *testing.T) {
 	st := openRouteRuleStore(t)
-	node, inA := addNodeAndInbound(t, st, "exit", "192.0.2.21", 12011)
-	next, inB := addNodeAndInbound(t, st, "next", "next.example", 12012)
+	node, inA := addNodeWithInbound(t, st, "exit", "192.0.2.21", 12011)
+	next, inB := addNodeWithInbound(t, st, "next", "next.example", 12012)
 	chain := &store.ProxyChain{
 		Name: "dns-chain",
 		Hops: []store.ProxyChainHop{
@@ -91,6 +91,16 @@ func TestBuildEmitsPerNodeDNS(t *testing.T) {
 		t.Fatal(err)
 	}
 	chain.Enabled = true
+	// Chain outbounds only exist on a node when a global plan proxies through it.
+	if err := st.CreateRoutePlan(&store.RoutePlan{
+		Name: "via-chain", Scope: "global", Enabled: true,
+		Rules: []store.RoutePlanRule{{
+			MatchType: "domain_suffix", MatchValue: "corp.example", Action: "proxy",
+			TargetChainID: chain.ID, Enabled: true,
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	loaded, err := st.GetNode(node.ID)
 	if err != nil {

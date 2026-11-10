@@ -29,18 +29,12 @@ type SettingsDraft = {
   concurrency: NumericDraft
   listenAddr: string
   publicBase: string
-  probeURL: string
-  probeIntervalSec: NumericDraft
-  probeTimeoutSec: NumericDraft
 }
 
 type ValidationErrors = {
   timeoutSec: string
   concurrency: string
   publicBase: string
-  probeURL: string
-  probeIntervalSec: string
-  probeTimeoutSec: string
   newPassword: string
   confirmPassword: string
 }
@@ -51,9 +45,6 @@ const DEFAULT_DRAFT: SettingsDraft = {
   concurrency: 8,
   listenAddr: '',
   publicBase: '',
-  probeURL: 'https://www.gstatic.com/generate_204',
-  probeIntervalSec: 60,
-  probeTimeoutSec: 10,
 }
 
 export default function Settings() {
@@ -164,9 +155,6 @@ export default function Settings() {
         max_concurrency: Number(draft.concurrency),
         listen_addr: draft.listenAddr.trim(),
         public_base_url: normalizePublicBase(draft.publicBase),
-        chain_probe_url: draft.probeURL.trim(),
-        chain_probe_interval_sec: Number(draft.probeIntervalSec),
-        chain_probe_timeout_sec: Number(draft.probeTimeoutSec),
       }
       if (newPassword) body.new_password = newPassword
 
@@ -325,47 +313,6 @@ export default function Settings() {
             </CardContent>
           </Card>
 
-          <Card className="border-border bg-card">
-            <CardHeader className="p-5 pb-3">
-              <CardTitle className="text-sm font-semibold flex items-center gap-2">
-                <Network className="h-4 w-4 text-muted-foreground" />
-                链路健康探测
-              </CardTitle>
-              <CardDescription className="text-xs text-muted-foreground">
-                入口 Agent 经完整代理链访问该 URL，并周期更新延迟与故障跳
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="p-5 pt-0 space-y-4">
-              <div className="flex flex-col space-y-1.5">
-                <Label htmlFor="settings-probe-url">探测 URL</Label>
-                <Input
-                  id="settings-probe-url"
-                  value={draft.probeURL}
-                  disabled={formDisabled}
-                  onChange={(e) => updateDraft({ probeURL: e.target.value })}
-                  className={errors.probeURL ? 'border-destructive' : ''}
-                />
-                {errors.probeURL && <p className="text-xs text-destructive">{errors.probeURL}</p>}
-              </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="flex flex-col space-y-1.5">
-                  <Label htmlFor="settings-probe-interval">探测间隔（秒）</Label>
-                  <Input id="settings-probe-interval" type="number" min={10} value={draft.probeIntervalSec}
-                    disabled={formDisabled} onChange={(e) => updateDraft({ probeIntervalSec: e.target.value })}
-                    className={errors.probeIntervalSec ? 'border-destructive' : ''} />
-                  {errors.probeIntervalSec && <p className="text-xs text-destructive">{errors.probeIntervalSec}</p>}
-                </div>
-                <div className="flex flex-col space-y-1.5">
-                  <Label htmlFor="settings-probe-timeout">单次超时（秒）</Label>
-                  <Input id="settings-probe-timeout" type="number" min={1} max={60} value={draft.probeTimeoutSec}
-                    disabled={formDisabled} onChange={(e) => updateDraft({ probeTimeoutSec: e.target.value })}
-                    className={errors.probeTimeoutSec ? 'border-destructive' : ''} />
-                  {errors.probeTimeoutSec && <p className="text-xs text-destructive">{errors.probeTimeoutSec}</p>}
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
           {/* Card 2: Services & Subscriptions */}
           <Card className="border-border bg-card">
             <CardHeader className="p-5 pb-3">
@@ -481,9 +428,6 @@ function draftFromResponse(settings: SettingsResponse): SettingsDraft {
     concurrency: settings.max_concurrency,
     listenAddr: settings.listen_addr || '',
     publicBase: settings.public_base_url || '',
-    probeURL: settings.chain_probe_url || 'https://www.gstatic.com/generate_204',
-    probeIntervalSec: settings.chain_probe_interval_sec || 60,
-    probeTimeoutSec: settings.chain_probe_timeout_sec || 10,
   }
 }
 
@@ -493,10 +437,7 @@ function sameDraft(a: SettingsDraft, b: SettingsDraft): boolean {
     String(a.timeoutSec) === String(b.timeoutSec) &&
     String(a.concurrency) === String(b.concurrency) &&
     a.listenAddr === b.listenAddr &&
-    a.publicBase === b.publicBase &&
-    a.probeURL === b.probeURL &&
-    String(a.probeIntervalSec) === String(b.probeIntervalSec) &&
-    String(a.probeTimeoutSec) === String(b.probeTimeoutSec)
+    a.publicBase === b.publicBase
   )
 }
 
@@ -509,9 +450,6 @@ function validate(
     timeoutSec: validateInteger(draft.timeoutSec, 1, 600, 'gRPC 超时'),
     concurrency: validateInteger(draft.concurrency, 1, 256, '最大并发任务数'),
     publicBase: validatePublicBase(draft.publicBase),
-    probeURL: validateProbeURL(draft.probeURL),
-    probeIntervalSec: validateInteger(draft.probeIntervalSec, 10, 86400, '探测间隔'),
-    probeTimeoutSec: validateInteger(draft.probeTimeoutSec, 1, 60, '探测超时'),
     newPassword: validatePassword(newPassword, confirmPassword),
     confirmPassword: validatePasswordConfirmation(newPassword, confirmPassword),
   }
@@ -539,21 +477,6 @@ function validatePublicBase(value: string): string {
     }
   } catch {
     return '请输入完整地址，例如 https://panel.example.com'
-  }
-  return ''
-}
-
-function validateProbeURL(value: string): string {
-  const trimmed = value.trim()
-  if (!trimmed) return '探测 URL 不能为空'
-  try {
-    const url = new URL(trimmed)
-    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-      return '探测 URL 仅支持 http:// 或 https://'
-    }
-    if (url.username || url.password) return '探测 URL 不能包含用户名或密码'
-  } catch {
-    return '请输入完整的 HTTP/HTTPS 探测 URL'
   }
   return ''
 }

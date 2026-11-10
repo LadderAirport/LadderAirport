@@ -298,7 +298,7 @@ func TestCreateInboundAndAttach(t *testing.T) {
 	}
 }
 
-func TestProxyChainOwnsBindingsAndPreservesOrder(t *testing.T) {
+func TestProxyChainReferencesStandaloneBindings(t *testing.T) {
 	s := openTestStore(t)
 	nodes := []*Node{
 		{Name: "entry", Address: "10.0.0.1", GRPCPort: 9090},
@@ -318,14 +318,27 @@ func TestProxyChainOwnsBindingsAndPreservesOrder(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-
-	chain := &ProxyChain{
-		Name: "entry-to-exit",
-		Hops: []ProxyChainHop{
-			{NodeID: nodes[0].ID, InboundID: inbounds[0].ID},
-			{NodeID: nodes[1].ID, InboundID: inbounds[1].ID, DialAddress: "edge.internal", DialPort: 18443},
-		},
+	newChain := func(name string) *ProxyChain {
+		return &ProxyChain{
+			Name: name,
+			Hops: []ProxyChainHop{
+				{NodeID: nodes[0].ID, InboundID: inbounds[0].ID},
+				{NodeID: nodes[1].ID, InboundID: inbounds[1].ID, DialAddress: "edge.internal", DialPort: 18443},
+			},
+		}
 	}
+
+	if err := s.CreateProxyChain(newChain("unbound")); err == nil ||
+		!strings.Contains(err.Error(), "尚未关联到该节点") {
+		t.Fatalf("hop without a standalone binding should be rejected, got %v", err)
+	}
+	for i := range nodes {
+		if err := s.SetNodeInbounds(nodes[i].ID, []string{inbounds[i].ID}); err != nil {
+			t.Fatalf("SetNodeInbounds: %v", err)
+		}
+	}
+
+	chain := newChain("entry-to-exit")
 	if err := s.CreateProxyChain(chain); err != nil {
 		t.Fatalf("CreateProxyChain: %v", err)
 	}
@@ -333,78 +346,108 @@ func TestProxyChainOwnsBindingsAndPreservesOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Enabled || got.State != "disabled" || len(got.Hops) != 2 {
+	if got.Enabled || len(got.Hops) != 2 {
 		t.Fatalf("created chain = %+v", got)
 	}
 	if got.Hops[0].Position != 0 || got.Hops[1].Position != 1 ||
 		got.Hops[1].DialAddress != "edge.internal" || got.Hops[1].DialPort != 18443 {
 		t.Fatalf("hop order/overrides not preserved: %+v", got.Hops)
 	}
+	if err := s.CreateProxyChain(newChain("shared-hops")); err != nil {
+		t.Fatalf("chains should be able to share bindings: %v", err)
+	}
+	if err := s.SetProxyChainEnabled(chain.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.GetProxyChain(chain.ID); !got.Enabled {
+		t.Fatal("chain not enabled")
+	}
+
 	if err := s.DeleteNode(nodes[0].ID); err == nil ||
 		!strings.Contains(err.Error(), "节点仍被代理链引用：entry-to-exit") {
 		t.Fatalf("删除代理链跳点节点时应返回明确的中文错误，实际为 %v", err)
 	}
-
-	if err := s.SetNodeInbounds(nodes[0].ID, []string{inbounds[0].ID}); err == nil ||
-		!strings.Contains(err.Error(), "已被代理链占用") {
-		t.Fatalf("standalone binding should be blocked, got %v", err)
+	if err := s.SetNodeInbounds(nodes[0].ID, nil); err == nil ||
+		!strings.Contains(err.Error(), "仍被代理链") {
+		t.Fatalf("detaching a hop binding should be blocked, got %v", err)
 	}
-	conflict := &ProxyChain{
-		Name: "conflict",
-		Hops: []ProxyChainHop{
-			{NodeID: nodes[0].ID, InboundID: inbounds[0].ID},
-			{NodeID: nodes[1].ID, InboundID: inbounds[1].ID},
-		},
-	}
-	if err := s.CreateProxyChain(conflict); err == nil ||
-		!strings.Contains(err.Error(), "已被另一条代理链占用") {
-		t.Fatalf("overlapping chain should be blocked, got %v", err)
+	if atts, _ := s.ListNodeInboundAttachments(nodes[0].ID); len(atts) != 1 {
+		t.Fatalf("blocked detach must keep the binding, got %+v", atts)
 	}
 }
 
-func TestMigrateSubscriptionsToChainsOnce(t *testing.T) {
-	s := openTestStore(t)
-	local := &Subscription{
-		Name: "local", Format: "clash", Token: "local-token",
-		IncludeAllInbounds: true, IncludeStandalone: true, Enabled: true,
-	}
-	externalOnly := &Subscription{
-		Name: "external", Format: "clash", Token: "external-token",
-		IncludeAllInbounds: false, IncludeStandalone: false, Enabled: true,
-	}
-	if err := s.CreateSubscription(local); err != nil {
+func TestOpenMigratesLegacyChainHopsToBindings(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy-chain.db")
+	s, err := Open(path)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.CreateSubscription(externalOnly); err != nil {
+	node := &Node{Name: "relay", Address: "10.0.0.1", GRPCPort: 9090}
+	if err := s.CreateNode(node); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.MigrateSubscriptionsToChains(); err != nil {
+	inbound := &InboundConfig{Name: "relay-in", Protocol: "shadowsocks", Enabled: true,
+		Params: map[string]any{"port": 8388}}
+	if err := s.CreateInbound(inbound); err != nil {
 		t.Fatal(err)
 	}
+	legacy := []string{
+		`DROP TABLE proxy_chain_hops`,
+		`CREATE TABLE proxy_chain_hops (
+			chain_id TEXT NOT NULL,
+			position INTEGER NOT NULL,
+			node_id TEXT NOT NULL,
+			inbound_id TEXT NOT NULL,
+			dial_address TEXT NOT NULL DEFAULT '',
+			dial_port INTEGER NOT NULL DEFAULT 0,
+			tls_skip_verify INTEGER NOT NULL DEFAULT 0,
+			PRIMARY KEY (chain_id, position),
+			UNIQUE (chain_id, node_id),
+			UNIQUE (node_id, inbound_id),
+			FOREIGN KEY (chain_id) REFERENCES proxy_chains(id) ON DELETE CASCADE,
+			FOREIGN KEY (node_id) REFERENCES nodes(id) ON DELETE RESTRICT,
+			FOREIGN KEY (inbound_id) REFERENCES inbounds(id) ON DELETE RESTRICT
+		)`,
+		`UPDATE inbounds SET params_json = json_set(params_json, '$.frp_enabled', json('true'), '$.frpc_config', 'cfg')`,
+		`INSERT INTO proxy_chains (id, name, enabled, state, created_at_unix, updated_at_unix)
+			VALUES ('c1', 'legacy', 1, 'healthy', 1, 1)`,
+	}
+	for _, stmt := range legacy {
+		if _, err := s.db.Exec(stmt); err != nil {
+			t.Fatalf("%s: %v", stmt, err)
+		}
+	}
+	if _, err := s.db.Exec(`INSERT INTO proxy_chain_hops (chain_id, position, node_id, inbound_id) VALUES ('c1', 0, ?, ?)`,
+		node.ID, inbound.ID); err != nil {
+		t.Fatal(err)
+	}
+	_ = s.Close()
 
-	gotLocal, err := s.GetSubscription(local.ID)
+	s, err = Open(path)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer s.Close()
+	atts, err := s.ListNodeInboundAttachments(node.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if gotLocal.IncludeStandalone || !gotLocal.IncludeAllChains {
-		t.Fatalf("local subscription not migrated to chain-only: %+v", gotLocal)
+	if len(atts) != 1 || atts[0].ID != inbound.ID || !atts[0].FRPEnabled || atts[0].FRPCConfig != "cfg" {
+		t.Fatalf("legacy hop not migrated to a standalone binding with FRP: %+v", atts)
 	}
-	gotExternal, err := s.GetSubscription(externalOnly.ID)
-	if err != nil {
+	if _, ok := atts[0].Params["frp_enabled"]; ok {
+		t.Fatalf("template FRP params should be stripped: %+v", atts[0].Params)
+	}
+	chain, err := s.GetProxyChain("c1")
+	if err != nil || !chain.Enabled || len(chain.Hops) != 1 {
+		t.Fatalf("chain = %+v, %v", chain, err)
+	}
+	var ddl string
+	if err := s.db.QueryRow(`SELECT sql FROM sqlite_master WHERE name = 'proxy_chain_hops'`).Scan(&ddl); err != nil {
 		t.Fatal(err)
 	}
-	if gotExternal.IncludeStandalone || gotExternal.IncludeAllChains {
-		t.Fatalf("external-only subscription should be unchanged: %+v", gotExternal)
-	}
-	settings, err := s.GetSettings()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !settings.ChainSubscriptionMigrated {
-		t.Fatal("migration marker not set")
-	}
-	if err := s.MigrateSubscriptionsToChains(); err != nil {
-		t.Fatalf("second migration must be a no-op: %v", err)
+	if strings.Contains(ddl, "UNIQUE (node_id, inbound_id)") {
+		t.Fatalf("legacy uniqueness constraint should be dropped: %s", ddl)
 	}
 }
 

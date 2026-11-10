@@ -93,14 +93,17 @@ func (s *Server) handleUpdateInbound(w http.ResponseWriter, r *http.Request) {
 		writeDecodeError(w, err)
 		return
 	}
-	if body.Protocol != nil || body.Params != nil || body.Enabled != nil {
+	// Chains are composed client-side, so protocol/param edits simply flow
+	// into the next subscription refresh. Disabling would leave an enabled
+	// chain pointing at a hop that no longer listens.
+	if body.Enabled != nil && !*body.Enabled && existing.Enabled {
 		used, err := s.Store.InboundUsedByEnabledChain(id)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 		if used {
-			writeError(w, http.StatusConflict, "该入站正被已启用的代理链使用，请先禁用代理链再修改协议参数")
+			writeError(w, http.StatusConflict, "该入站正被已启用的代理链作为跳点使用，请先停用代理链再禁用入站")
 			return
 		}
 	}
