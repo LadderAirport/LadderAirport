@@ -131,11 +131,11 @@ func TestServerUsersAdmissionOnly(t *testing.T) {
 	secret, _ := NewSecret()
 	vless := store.InboundConfig{Name: "v", Protocol: "vless", Params: map[string]any{"uuid": "x", "flow": "xtls-rprx-vision"}}
 
-	res, ok, err := ServerUsers(vless, store.InboundAdmission{}, nil)
+	res, ok, err := ServerUsers(vless, store.NodeAdmission{}, nil)
 	if err != nil || ok {
 		t.Fatalf("no users, not admission-only: ok=%v err=%v", ok, err)
 	}
-	res, ok, err = ServerUsers(vless, store.InboundAdmission{}, []Identity{alice})
+	res, ok, err = ServerUsers(vless, store.NodeAdmission{}, []Identity{alice})
 	if err != nil || !ok || res.ReplaceDefault || len(res.Users) != 1 {
 		t.Fatalf("shared mode: %+v ok=%v err=%v", res, ok, err)
 	}
@@ -143,80 +143,98 @@ func TestServerUsersAdmissionOnly(t *testing.T) {
 		t.Fatalf("user entry: %v", res.Users[0])
 	}
 
-	adm := store.InboundAdmission{InboundID: "v", AdmissionOnly: true, InternalSecret: secret}
-	res, ok, err = ServerUsers(vless, adm, []Identity{alice})
+	node := store.NodeAdmission{NodeID: "n", AdmissionOnly: true, InternalSecret: secret}
+	res, ok, err = ServerUsers(vless, node, []Identity{alice})
 	if err != nil || !ok || !res.ReplaceDefault || len(res.Users) != 2 || res.Users[0]["name"] != InternalUserName {
 		t.Fatalf("admission-only: %+v ok=%v err=%v", res, ok, err)
 	}
 	// Admission-only with nobody admitted still keeps the internal user, so
 	// the inbound never ends up accepting the shared credential.
-	res, ok, err = ServerUsers(vless, adm, nil)
+	res, ok, err = ServerUsers(vless, node, nil)
 	if err != nil || !ok || len(res.Users) != 1 {
 		t.Fatalf("admission-only empty: %+v ok=%v err=%v", res, ok, err)
 	}
 
+	// Inbounds that cannot distinguish users stay shared, even on an
+	// admission-only node.
 	legacySS := store.InboundConfig{Name: "ss", Protocol: "shadowsocks", Params: map[string]any{"method": "aes-128-gcm"}}
-	if _, ok, err := ServerUsers(legacySS, store.InboundAdmission{}, []Identity{alice}); ok || err != nil {
-		t.Fatalf("legacy SS in shared mode must stay untouched: ok=%v err=%v", ok, err)
-	}
-	if _, _, err := ServerUsers(legacySS, store.InboundAdmission{AdmissionOnly: true, InternalSecret: secret}, nil); err == nil {
-		t.Fatal("legacy SS admission-only must error")
+	openHTTP := store.InboundConfig{Name: "h", Protocol: "http", Params: map[string]any{"auth_mode": "none"}}
+	for _, in := range []store.InboundConfig{legacySS, openHTTP} {
+		for _, n := range []store.NodeAdmission{{}, node} {
+			if _, ok, err := ServerUsers(in, n, []Identity{alice}); ok || err != nil {
+				t.Fatalf("%s on %+v must stay untouched: ok=%v err=%v", in.Protocol, n, ok, err)
+			}
+		}
 	}
 }
 
 func TestForSubscription(t *testing.T) {
 	alice := identity(t, testUser(t, "alice"))
 	secret, _ := NewSecret()
-	trojan := subscription.ProxyEndpoint{
+	onNode := func(ep subscription.ProxyEndpoint, nodeID string) subscription.ProxyEndpoint {
+		ep.Node = store.Node{ID: nodeID}
+		return ep
+	}
+	trojanTpl := subscription.ProxyEndpoint{
 		Inbound: store.InboundConfig{ID: "t", Protocol: "trojan"},
 		Params:  map[string]any{"password": "shared"},
 	}
-	ss := subscription.ProxyEndpoint{
+	ssTpl := subscription.ProxyEndpoint{
 		Inbound: store.InboundConfig{ID: "s", Protocol: "shadowsocks", Params: map[string]any{"method": "2022-blake3-aes-128-gcm"}},
 		Params:  map[string]any{"method": "2022-blake3-aes-128-gcm", "password": "PSK"},
 	}
-	none := map[string]store.InboundAdmission{}
-	only := map[string]store.InboundAdmission{
-		"t": {InboundID: "t", AdmissionOnly: true, InternalSecret: secret},
-		"s": {InboundID: "s", AdmissionOnly: true, InternalSecret: secret},
+	legacyTpl := subscription.ProxyEndpoint{
+		Inbound: store.InboundConfig{ID: "l", Protocol: "shadowsocks", Params: map[string]any{"method": "aes-128-gcm"}},
+		Params:  map[string]any{"method": "aes-128-gcm", "password": "legacy"},
+	}
+	admissions := map[string]store.NodeAdmission{
+		"locked": {NodeID: "locked", AdmissionOnly: true, InternalSecret: secret},
 	}
 
-	if ep, keep, _ := ForSubscription(trojan, nil, none); !keep || ep.Params["password"] != "shared" {
-		t.Fatalf("shared sub, shared inbound: keep=%v %v", keep, ep.Params)
+	// The same inbound template behaves per node.
+	if ep, keep, _ := ForSubscription(onNode(trojanTpl, "open"), nil, admissions); !keep || ep.Params["password"] != "shared" {
+		t.Fatalf("shared sub on open node: keep=%v %v", keep, ep.Params)
 	}
-	if _, keep, _ := ForSubscription(trojan, nil, only); keep {
-		t.Fatal("shared sub must omit admission-only inbounds")
+	if _, keep, _ := ForSubscription(onNode(trojanTpl, "locked"), nil, admissions); keep {
+		t.Fatal("shared sub must omit inbounds on admission-only nodes")
 	}
-	ep, keep, err := ForSubscription(trojan, &alice, none)
+	ep, keep, err := ForSubscription(onNode(trojanTpl, "open"), &alice, admissions)
 	if err != nil || !keep || ep.Params["password"] != alice.Password() {
 		t.Fatalf("user sub: keep=%v %v err=%v", keep, ep.Params, err)
 	}
-	if trojan.Params["password"] != "shared" {
+	if trojanTpl.Params["password"] != "shared" {
 		t.Fatal("ForSubscription must not mutate the shared params map")
 	}
-	// SS in shared mode keeps the shared password even for user subscriptions.
-	if ep, _, _ := ForSubscription(ss, &alice, none); ep.Params["password"] != "PSK" {
-		t.Fatalf("SS shared mode: %v", ep.Params)
+	// SS2022 switches to "server-key:user-key" only on admission-only nodes.
+	if ep, _, _ := ForSubscription(onNode(ssTpl, "open"), &alice, admissions); ep.Params["password"] != "PSK" {
+		t.Fatalf("SS on open node: %v", ep.Params)
 	}
 	key, _ := alice.SSKey("2022-blake3-aes-128-gcm")
-	if ep, keep, _ := ForSubscription(ss, &alice, only); !keep || ep.Params["password"] != "PSK:"+key {
-		t.Fatalf("SS admission-only: keep=%v %v", keep, ep.Params)
+	if ep, keep, _ := ForSubscription(onNode(ssTpl, "locked"), &alice, admissions); !keep || ep.Params["password"] != "PSK:"+key {
+		t.Fatalf("SS on locked node: keep=%v %v", keep, ep.Params)
+	}
+	// Unsupported inbounds stay shared on locked nodes, for every subscription.
+	for _, user := range []*Identity{nil, &alice} {
+		if ep, keep, _ := ForSubscription(onNode(legacyTpl, "locked"), user, admissions); !keep || ep.Params["password"] != "legacy" {
+			t.Fatalf("legacy SS on locked node (user=%v): keep=%v %v", user != nil, keep, ep.Params)
+		}
 	}
 }
 
 func TestInternalEndpoint(t *testing.T) {
 	secret, _ := NewSecret()
 	ep := subscription.ProxyEndpoint{
+		Node:    store.Node{ID: "n"},
 		Inbound: store.InboundConfig{ID: "v", Protocol: "vless"},
 		Params:  map[string]any{"uuid": "shared"},
 	}
-	out, err := InternalEndpoint(ep, map[string]store.InboundAdmission{})
+	out, err := InternalEndpoint(ep, map[string]store.NodeAdmission{})
 	if err != nil || out.Params["uuid"] != "shared" {
 		t.Fatalf("%v %v", out.Params, err)
 	}
-	adm := store.InboundAdmission{InboundID: "v", AdmissionOnly: true, InternalSecret: secret}
+	adm := store.NodeAdmission{NodeID: "n", AdmissionOnly: true, InternalSecret: secret}
 	internal, _ := Internal(adm)
-	out, err = InternalEndpoint(ep, map[string]store.InboundAdmission{"v": adm})
+	out, err = InternalEndpoint(ep, map[string]store.NodeAdmission{"n": adm})
 	if err != nil || out.Params["uuid"] != internal.UUID() {
 		t.Fatalf("%v %v", out.Params, err)
 	}

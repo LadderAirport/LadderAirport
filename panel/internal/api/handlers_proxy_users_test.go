@@ -2,9 +2,7 @@ package api_test
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
-	"strings"
 	"testing"
 	"time"
 
@@ -93,25 +91,27 @@ func TestProxyUserSubscriptionAdmission(t *testing.T) {
 		t.Fatalf("legacy SS keeps the shared password: %v", got["shadowsocks"])
 	}
 
-	// Legacy SS cannot be admission-only; VLESS can.
-	if r, body := doJSON(t, client, http.MethodPut, ts.URL+"/api/v1/inbounds/"+ss.ID+"/admission", map[string]any{"admission_only": true}); r.StatusCode != http.StatusBadRequest {
-		t.Fatalf("legacy SS admission = %d %v", r.StatusCode, body)
+	// Lock the node: VLESS becomes user-only; legacy SS cannot distinguish
+	// users, so it stays shared and is reported as such.
+	r, adm := doJSON(t, client, http.MethodPut, ts.URL+"/api/v1/nodes/"+node.ID+"/admission", map[string]any{"admission_only": true})
+	if r.StatusCode != http.StatusOK || adm["admission_only"] != true {
+		t.Fatalf("node admission = %d %v", r.StatusCode, adm)
 	}
-	if r, body := doJSON(t, client, http.MethodPut, ts.URL+"/api/v1/inbounds/"+vless.ID+"/admission", map[string]any{"admission_only": true}); r.StatusCode != http.StatusOK || body["admission_only"] != true {
-		t.Fatalf("vless admission = %d %v", r.StatusCode, body)
+	sharedInbounds, _ := adm["shared_inbounds"].([]any)
+	if len(sharedInbounds) != 1 || sharedInbounds[0].(map[string]any)["id"] != ss.ID {
+		t.Fatalf("shared_inbounds = %v", adm["shared_inbounds"])
 	}
 	got = singboxOutboundsByType(t, fetchSub(t, client, sharedURL))
-	if _, ok := got["vless"]; ok || got["shadowsocks"] == nil {
-		t.Fatalf("shared sub must drop the admission-only inbound: %v", got)
+	if _, ok := got["vless"]; ok || got["shadowsocks"]["password"] != "shared-ss" {
+		t.Fatalf("shared sub must drop locked VLESS and keep legacy SS: %v", got)
 	}
-	if got = singboxOutboundsByType(t, fetchSub(t, client, userURL)); got["vless"]["uuid"] != id.UUID() {
-		t.Fatalf("user sub after admission-only = %v", got)
+	got = singboxOutboundsByType(t, fetchSub(t, client, userURL))
+	if got["vless"]["uuid"] != id.UUID() || got["shadowsocks"]["password"] != "shared-ss" {
+		t.Fatalf("user sub after node admission = %v", got)
 	}
-	// Switching an admission-only inbound to an unsupported protocol is rejected.
-	if r, body := doJSON(t, client, http.MethodPut, ts.URL+"/api/v1/inbounds/"+vless.ID, map[string]any{
-		"protocol": "shadowsocks", "params": map[string]any{"port": 14001, "method": "aes-128-gcm", "password": "p"},
-	}); r.StatusCode != http.StatusBadRequest || !strings.Contains(fmt.Sprint(body["error"]), "仅准入用户") {
-		t.Fatalf("incompatible inbound edit = %d %v", r.StatusCode, body)
+	r, list := doJSONList(t, client, ts.URL+"/api/v1/node-admissions")
+	if r.StatusCode != http.StatusOK || len(list) != 1 || list[0]["admission_only"] != true {
+		t.Fatalf("node-admissions = %d %v", r.StatusCode, list)
 	}
 
 	// Resetting credentials changes the derived UUID.
@@ -143,4 +143,18 @@ func TestProxyUserSubscriptionAdmission(t *testing.T) {
 	if err != nil || after.UserID != "" {
 		t.Fatalf("sub after user delete = %+v %v", after, err)
 	}
+}
+
+func doJSONList(t *testing.T, client *http.Client, url string) (*http.Response, []map[string]any) {
+	t.Helper()
+	resp, err := client.Get(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var out []map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	return resp, out
 }

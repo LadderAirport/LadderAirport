@@ -1056,23 +1056,29 @@ export function deleteInbound(id: string): Promise<void> {
   return request('DELETE', `/inbounds/${id}`)
 }
 
-// --- Inbound admission ---
+// --- Node admission ---
 
-export interface InboundAdmission {
-  inbound_id: string
-  /** Only proxy users are accepted; the inbound's shared credential stops working. */
+export interface SharedInbound {
+  id: string
+  name: string
+  protocol: string
+  reason: string
+}
+
+export interface NodeAdmission {
+  node_id: string
+  /** Inbounds on this node accept only proxy users; their shared credentials stop working. */
   admission_only: boolean
-  /** Whether the protocol / settings can carry per-user credentials. */
-  supported: boolean
-  reason?: string
+  /** Attached inbounds that cannot distinguish users and keep their shared credential. */
+  shared_inbounds: SharedInbound[]
 }
 
-export function listInboundAdmissions(): Promise<InboundAdmission[]> {
-  return request('GET', '/inbound-admissions')
+export function listNodeAdmissions(): Promise<NodeAdmission[]> {
+  return request('GET', '/node-admissions')
 }
 
-export function setInboundAdmission(id: string, admissionOnly: boolean): Promise<InboundAdmission> {
-  return request('PUT', `/inbounds/${id}/admission`, { admission_only: admissionOnly })
+export function setNodeAdmission(id: string, admissionOnly: boolean): Promise<NodeAdmission> {
+  return request('PUT', `/nodes/${id}/admission`, { admission_only: admissionOnly })
 }
 
 // --- Proxy users ---

@@ -48,6 +48,10 @@ func Open(path string) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	if err := s.migrateInboundAdmissionToNodes(); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	if err := s.ensureDefaultSettings(); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -275,6 +279,12 @@ func (s *Store) migrate() error {
 			admission_only INTEGER NOT NULL DEFAULT 0,
 			internal_secret TEXT NOT NULL,
 			FOREIGN KEY (inbound_id) REFERENCES inbounds(id) ON DELETE CASCADE
+		)`,
+		`CREATE TABLE IF NOT EXISTS node_admission (
+			node_id TEXT PRIMARY KEY,
+			admission_only INTEGER NOT NULL DEFAULT 0,
+			internal_secret TEXT NOT NULL,
+			FOREIGN KEY (node_id) REFERENCES nodes(id) ON DELETE CASCADE
 		)`,
 		`CREATE TABLE IF NOT EXISTS external_sources (
 			id TEXT PRIMARY KEY,
@@ -1220,6 +1230,9 @@ func (s *Store) DeleteNode(id string) error {
 	if runningAutomation > 0 {
 		return fmt.Errorf("节点有 %d 个正在执行的 DNS/证书任务，请等待任务结束后再删除", runningAutomation)
 	}
+	if _, err := tx.Exec(`DELETE FROM node_admission WHERE node_id = ?`, id); err != nil {
+		return fmt.Errorf("删除节点准入设置失败：%w", err)
+	}
 	if _, err := tx.Exec(`
 		DELETE FROM automation_jobs
 		WHERE target_type = 'protocol_certificate'
@@ -1839,7 +1852,7 @@ func (s *Store) admissionFingerprint() (string, error) {
 			include_standalone || ':' || COALESCE(include_all_inbounds, 1) || ':' || inbound_ids_json || ':' ||
 			include_all_chains || ':' || chain_ids_json
 		FROM subscriptions WHERE user_id != '' ORDER BY id`,
-		`SELECT inbound_id || ':' || admission_only || ':' || internal_secret FROM inbound_admission ORDER BY inbound_id`,
+		`SELECT node_id || ':' || admission_only || ':' || internal_secret FROM node_admission ORDER BY node_id`,
 	}
 	for i, q := range queries {
 		rows, err := s.db.Query(q)

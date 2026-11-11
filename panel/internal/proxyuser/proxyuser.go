@@ -17,9 +17,9 @@ import (
 	"github.com/ladderairport/panel/internal/store"
 )
 
-// InternalUserName is the sing-box user the panel keeps on admission-only
-// inbounds for node-side chain outbounds (global route plans). Its secret is
-// per inbound and never rendered into subscriptions.
+// InternalUserName is the sing-box user the panel keeps on inbounds of
+// admission-only nodes for node-side chain outbounds (global route plans).
+// Its secret is per node and never rendered into subscriptions.
 const InternalUserName = "__panel"
 
 // Identity is one admitted principal. Name becomes the sing-box user name
@@ -47,11 +47,11 @@ func ForUser(u store.ProxyUser) (Identity, error) {
 	return Identity{Name: u.ID, Secret: secret}, nil
 }
 
-// Internal builds the panel-internal identity of an admission-only inbound.
-func Internal(a store.InboundAdmission) (Identity, error) {
+// Internal builds the panel-internal identity of an admission-only node.
+func Internal(a store.NodeAdmission) (Identity, error) {
 	secret, err := decodeSecret(a.InternalSecret)
 	if err != nil {
-		return Identity{}, fmt.Errorf("入站 %s 的内部凭据：%w", a.InboundID, err)
+		return Identity{}, fmt.Errorf("节点 %s 的内部凭据：%w", a.NodeID, err)
 	}
 	return Identity{Name: InternalUserName, Secret: secret}, nil
 }
@@ -125,6 +125,17 @@ func Supports(in store.InboundConfig) (bool, string) {
 	default:
 		return false, fmt.Sprintf("协议 %q 不支持多用户", in.Protocol)
 	}
+}
+
+// AdmissionOnly reports whether an inbound on a node only admits proxy
+// users. Inbounds that cannot distinguish users keep their shared
+// credential even on admission-only nodes.
+func AdmissionOnly(in store.InboundConfig, node store.NodeAdmission) bool {
+	if !node.AdmissionOnly {
+		return false
+	}
+	ok, _ := Supports(in)
+	return ok
 }
 
 // UsesUsers reports whether per-user credentials are in effect for an

@@ -65,7 +65,7 @@ func (b *Builder) BuildWithChains(nodeID string, chains []store.ProxyChain) (Res
 	if err != nil {
 		return Result{}, err
 	}
-	users, err := b.inboundUsers(inbounds, chains)
+	users, err := b.inboundUsers(nodeID, inbounds, chains)
 	if err != nil {
 		return Result{}, err
 	}
@@ -285,7 +285,7 @@ func (b *Builder) composeChainFrom(chain store.ProxyChain, from int, bindInterfa
 	if from >= len(chain.Hops) {
 		return nil, "direct", nil
 	}
-	admissions, err := b.Store.ListInboundAdmissions()
+	admissions, err := b.Store.ListNodeAdmissions()
 	if err != nil {
 		return nil, "", err
 	}
@@ -611,12 +611,14 @@ func paramInt(params map[string]any, key string) (int, error) {
 }
 
 // inboundUsers computes the per-user credentials of every enabled inbound on
-// a node from the users' subscriptions (see proxyuser.BuildPlan).
-func (b *Builder) inboundUsers(inbounds []store.InboundConfig, chains []store.ProxyChain) (map[string]converter.InboundUsers, error) {
-	admissions, err := b.Store.ListInboundAdmissions()
+// a node from the users' subscriptions (see proxyuser.BuildPlan) and the
+// node's admission setting.
+func (b *Builder) inboundUsers(nodeID string, inbounds []store.InboundConfig, chains []store.ProxyChain) (map[string]converter.InboundUsers, error) {
+	admissions, err := b.Store.ListNodeAdmissions()
 	if err != nil {
 		return nil, err
 	}
+	nodeAdmission := admissions[nodeID]
 	users, err := b.Store.ListProxyUsers()
 	if err != nil {
 		return nil, err
@@ -637,7 +639,7 @@ func (b *Builder) inboundUsers(inbounds []store.InboundConfig, chains []store.Pr
 		if !in.Enabled {
 			continue
 		}
-		result, ok, err := proxyuser.ServerUsers(in, admissions[in.ID], plan.UsersFor(in.ID))
+		result, ok, err := proxyuser.ServerUsers(in, nodeAdmission, plan.UsersFor(in.ID))
 		if err != nil {
 			return nil, err
 		}

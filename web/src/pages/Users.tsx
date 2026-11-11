@@ -18,14 +18,14 @@ import { Edit, KeyRound, Loader2, Plus, RefreshCw, ShieldCheck, Trash2, UserRoun
 import {
   createProxyUser,
   deleteProxyUser,
-  listInboundAdmissions,
-  listInbounds,
+  listNodeAdmissions,
+  listNodes,
   listProxyUsers,
   resetProxyUserCredentials,
-  setInboundAdmission,
+  setNodeAdmission,
   updateProxyUser,
-  type InboundAdmission,
-  type InboundConfig,
+  type Node,
+  type NodeAdmission,
   type ProxyUser,
 } from '../api/client'
 import { toast } from '../lib/toast'
@@ -38,8 +38,8 @@ const PUSH_HINT = '约 5 秒后自动下发到节点，受影响节点会短暂�
 
 export default function Users() {
   const [users, setUsers] = useState<ProxyUser[]>([])
-  const [inbounds, setInbounds] = useState<InboundConfig[]>([])
-  const [admissions, setAdmissions] = useState<InboundAdmission[]>([])
+  const [nodes, setNodes] = useState<Node[]>([])
+  const [admissions, setAdmissions] = useState<NodeAdmission[]>([])
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState('')
   const [pending, setPending] = useState<Set<string>>(new Set())
@@ -49,8 +49,8 @@ export default function Users() {
   const [resetTarget, setResetTarget] = useState<ProxyUser | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<ProxyUser | null>(null)
 
-  const admissionByInbound = useMemo(
-    () => new Map(admissions.map((item) => [item.inbound_id, item])),
+  const admissionByNode = useMemo(
+    () => new Map(admissions.map((item) => [item.node_id, item])),
     [admissions],
   )
 
@@ -58,13 +58,13 @@ export default function Users() {
     setLoading(true)
     setLoadError('')
     try {
-      const [nextUsers, nextInbounds, nextAdmissions] = await Promise.all([
+      const [nextUsers, nextNodes, nextAdmissions] = await Promise.all([
         listProxyUsers(),
-        listInbounds(),
-        listInboundAdmissions(),
+        listNodes(),
+        listNodeAdmissions(),
       ])
       setUsers(nextUsers ?? [])
-      setInbounds(nextInbounds ?? [])
+      setNodes(nextNodes ?? [])
       setAdmissions(nextAdmissions ?? [])
     } catch (err) {
       setLoadError(errorText(err, '用户加载失败'))
@@ -159,19 +159,19 @@ export default function Users() {
     }
   }
 
-  async function toggleAdmission(inbound: InboundConfig, admissionOnly: boolean) {
-    const key = `inbound:${inbound.id}`
+  async function toggleAdmission(node: Node, admissionOnly: boolean) {
+    const key = `node:${node.id}`
     markPending(key, true)
     try {
-      const updated = await setInboundAdmission(inbound.id, admissionOnly)
+      const updated = await setNodeAdmission(node.id, admissionOnly)
       setAdmissions((current) => {
-        const rest = current.filter((item) => item.inbound_id !== updated.inbound_id)
+        const rest = current.filter((item) => item.node_id !== updated.node_id)
         return [...rest, updated]
       })
       toast.success(
         admissionOnly
-          ? `已开启仅准入用户：未绑定用户的订阅将不再包含该入站；${PUSH_HINT}`
-          : `已关闭仅准入用户，入站的共享凭据恢复可用；${PUSH_HINT}`,
+          ? `已开启仅准入用户：未绑定用户的订阅将不再包含该节点上的这些入站；${PUSH_HINT}`
+          : `已关闭仅准入用户，该节点入站的共享凭据恢复可用；${PUSH_HINT}`,
       )
     } catch (err) {
       toast.error(errorText(err, '操作失败'))
@@ -300,48 +300,53 @@ export default function Users() {
         <CardHeader className="p-5 pb-3">
           <CardTitle className="text-sm font-semibold flex items-center gap-2">
             <ShieldCheck className="h-4 w-4 text-muted-foreground" />
-            入站准入
+            节点准入
           </CardTitle>
           <CardDescription className="text-xs text-muted-foreground">
-            开启「仅准入用户」后，入站自身的共享凭据失效，只接受已绑定用户的凭据；未绑定用户的订阅不再包含该入站。
-            Shadowsocks 只有 2022-blake3-aes-128/256-gcm 支持，开启后会切换为多用户模式，客户端需刷新订阅。
+            对节点开启「仅准入用户」后，该节点上入站的共享凭据失效，只接受已绑定用户的凭据；未绑定用户的订阅不再包含这些入站。
+            同一个入站在其他节点上不受影响。Shadowsocks 2022（AES）会切换为多用户模式，客户端需刷新订阅。
           </CardDescription>
         </CardHeader>
         <CardContent className="p-5 pt-0">
-          {inbounds.length === 0 ? (
-            <p className="text-xs text-muted-foreground">暂无入站</p>
+          {nodes.length === 0 ? (
+            <p className="text-xs text-muted-foreground">暂无节点</p>
           ) : (
             <div className="divide-y divide-border rounded-md border border-border">
-              {inbounds.map((inbound) => {
-                const admission = admissionByInbound.get(inbound.id)
-                const supported = admission?.supported ?? false
+              {nodes.map((node) => {
+                const admission = admissionByNode.get(node.id)
                 const only = admission?.admission_only ?? false
-                const busy = pending.has(`inbound:${inbound.id}`)
+                const shared = admission?.shared_inbounds ?? []
+                const busy = pending.has(`node:${node.id}`)
                 return (
-                  <div key={inbound.id} className="flex items-center justify-between gap-3 px-3 py-2.5">
-                    <div className="min-w-0">
+                  <div key={node.id} className="flex items-start justify-between gap-3 px-3 py-2.5">
+                    <div className="min-w-0 space-y-1">
                       <div className="flex items-center gap-2">
-                        <span className="text-sm font-medium text-foreground truncate">{inbound.name}</span>
-                        <Badge variant="outline" className="border-border text-[10px] font-mono">
-                          {inbound.protocol.toUpperCase()}
-                        </Badge>
+                        <span className="text-sm font-medium text-foreground truncate">{node.name}</span>
                         {only && <Badge variant="success" className="text-[10px]">仅准入用户</Badge>}
                       </div>
-                      <p className="text-[11px] text-muted-foreground mt-0.5">
-                        {supported
-                          ? only
-                            ? '只接受已绑定用户的凭据'
-                            : inbound.protocol === 'shadowsocks'
-                              ? '共享凭据模式：用户订阅仍使用共享密码，开启仅准入后才分配独立密钥'
-                              : '共享凭据与用户凭据同时可用'
-                          : admission?.reason || '不支持多用户'}
+                      <p className="text-[11px] text-muted-foreground">
+                        {only ? '只接受已绑定用户的凭据' : '共享凭据与用户凭据同时可用'}
                       </p>
+                      {shared.length > 0 && (
+                        <div className={`text-[11px] ${only ? 'text-amber-600 dark:text-amber-400' : 'text-muted-foreground'}`}>
+                          {only ? '以下入站无法区分用户，仍使用共享凭据：' : '开启后以下入站无法区分用户，仍会使用共享凭据：'}
+                          <ul className="mt-0.5 space-y-0.5">
+                            {shared.map((inbound) => (
+                              <li key={inbound.id} title={inbound.reason}>
+                                <span className="font-medium">{inbound.name}</span>
+                                <span className="font-mono"> ({inbound.protocol.toUpperCase()})</span>
+                                <span> · {inbound.reason}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
                     </div>
                     <Switch
                       checked={only}
-                      disabled={busy || (!supported && !only)}
-                      onCheckedChange={(value) => void toggleAdmission(inbound, value)}
-                      aria-label={`${inbound.name} 仅准入用户`}
+                      disabled={busy}
+                      onCheckedChange={(value) => void toggleAdmission(node, value)}
+                      aria-label={`${node.name} 仅准入用户`}
                     />
                   </div>
                 )
@@ -388,7 +393,7 @@ export default function Users() {
       <ConfirmModal
         open={!!deleteTarget}
         title="删除用户"
-        description={`确定删除「${deleteTarget?.name || ''}」吗？其订阅会解除绑定并改用共享凭据（仅准入用户的入站将不再出现在这些订阅里）。`}
+        description={`确定删除「${deleteTarget?.name || ''}」吗？其订阅会解除绑定并改用共享凭据（仅准入用户节点上的入站将不再出现在这些订阅里）。`}
         confirmText="确认删除"
         confirmVariant="destructive"
         onConfirm={() => void confirmDelete()}

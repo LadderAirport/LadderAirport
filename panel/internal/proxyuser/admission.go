@@ -113,14 +113,13 @@ type InboundUsers struct {
 	Users          []map[string]any
 }
 
-// ServerUsers builds the sing-box users for an inbound. ok=false means the
-// inbound config needs no change (no admitted users, not admission-only).
-func ServerUsers(in store.InboundConfig, adm store.InboundAdmission, admitted []Identity) (InboundUsers, bool, error) {
-	if adm.AdmissionOnly {
-		if supported, reason := Supports(in); !supported {
-			return InboundUsers{}, false, fmt.Errorf("入站 %q 开启了「仅准入用户」，但%s", in.Name, reason)
-		}
-		internal, err := Internal(adm)
+// ServerUsers builds the sing-box users for an inbound on a node. ok=false
+// means the inbound config needs no change (no admitted users and not
+// admission-only, or an inbound that cannot distinguish users).
+func ServerUsers(in store.InboundConfig, node store.NodeAdmission, admitted []Identity) (InboundUsers, bool, error) {
+	only := AdmissionOnly(in, node)
+	if only {
+		internal, err := Internal(node)
 		if err != nil {
 			return InboundUsers{}, false, err
 		}
@@ -128,7 +127,7 @@ func ServerUsers(in store.InboundConfig, adm store.InboundAdmission, admitted []
 	} else if len(admitted) == 0 || !UsesUsers(in, false) {
 		return InboundUsers{}, false, nil
 	}
-	out := InboundUsers{ReplaceDefault: adm.AdmissionOnly, Users: make([]map[string]any, 0, len(admitted))}
+	out := InboundUsers{ReplaceDefault: only, Users: make([]map[string]any, 0, len(admitted))}
 	for _, id := range admitted {
 		u, err := ServerUser(in, id)
 		if err != nil {
@@ -140,10 +139,10 @@ func ServerUsers(in store.InboundConfig, adm store.InboundAdmission, admitted []
 }
 
 // InternalEndpoint swaps a node-side chain hop onto the panel's internal
-// credential when the hop's inbound is admission-only.
-func InternalEndpoint(ep subscription.ProxyEndpoint, admissions map[string]store.InboundAdmission) (subscription.ProxyEndpoint, error) {
-	adm, ok := admissions[ep.Inbound.ID]
-	if !ok || !adm.AdmissionOnly {
+// credential when the hop inbound only admits proxy users on its node.
+func InternalEndpoint(ep subscription.ProxyEndpoint, admissions map[string]store.NodeAdmission) (subscription.ProxyEndpoint, error) {
+	adm := admissions[ep.Node.ID]
+	if !AdmissionOnly(ep.Inbound, adm) {
 		return ep, nil
 	}
 	internal, err := Internal(adm)
@@ -160,10 +159,10 @@ func InternalEndpoint(ep subscription.ProxyEndpoint, admissions map[string]store
 
 // ForSubscription rewrites one rendered endpoint for a subscription.
 // user == nil means a shared (unbound) subscription. keep=false means the
-// endpoint must be omitted: its inbound is admission-only and the
-// subscription has no credential it would accept.
-func ForSubscription(ep subscription.ProxyEndpoint, user *Identity, admissions map[string]store.InboundAdmission) (out subscription.ProxyEndpoint, keep bool, err error) {
-	only := admissions[ep.Inbound.ID].AdmissionOnly
+// endpoint must be omitted: its node is admission-only and the subscription
+// has no credential the inbound would accept.
+func ForSubscription(ep subscription.ProxyEndpoint, user *Identity, admissions map[string]store.NodeAdmission) (out subscription.ProxyEndpoint, keep bool, err error) {
+	only := AdmissionOnly(ep.Inbound, admissions[ep.Node.ID])
 	if user != nil && UsesUsers(ep.Inbound, only) {
 		params, err := ClientParams(ep.Inbound, ep.Params, *user)
 		if err != nil {

@@ -1,7 +1,9 @@
 package store
 
 import (
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"fmt"
 	"strings"
 )
@@ -137,51 +139,117 @@ func (s *Store) HasUserBoundSubscriptions() (bool, error) {
 	return n > 0, nil
 }
 
-// --- Inbound admission ---
+// --- Node admission ---
 
-// ListInboundAdmissions returns admission settings keyed by inbound ID.
-// Inbounds without a row are not admission-only.
-func (s *Store) ListInboundAdmissions() (map[string]InboundAdmission, error) {
-	rows, err := s.db.Query(`SELECT inbound_id, admission_only, internal_secret FROM inbound_admission`)
+// ListNodeAdmissions returns admission settings keyed by node ID.
+// Nodes without a row are not admission-only.
+func (s *Store) ListNodeAdmissions() (map[string]NodeAdmission, error) {
+	rows, err := s.db.Query(`SELECT node_id, admission_only, internal_secret FROM node_admission`)
 	if err != nil {
-		return nil, fmt.Errorf("查询入站准入设置失败：%w", err)
+		return nil, fmt.Errorf("查询节点准入设置失败：%w", err)
 	}
 	defer rows.Close()
-	out := map[string]InboundAdmission{}
+	out := map[string]NodeAdmission{}
 	for rows.Next() {
-		var a InboundAdmission
+		var a NodeAdmission
 		var only int
-		if err := rows.Scan(&a.InboundID, &only, &a.InternalSecret); err != nil {
-			return nil, fmt.Errorf("读取入站准入设置失败：%w", err)
+		if err := rows.Scan(&a.NodeID, &only, &a.InternalSecret); err != nil {
+			return nil, fmt.Errorf("读取节点准入设置失败：%w", err)
 		}
 		a.AdmissionOnly = only != 0
-		out[a.InboundID] = a
+		out[a.NodeID] = a
 	}
 	return out, rows.Err()
 }
 
-// SetInboundAdmission stores the admission-only flag. newSecret is used only
-// when the inbound has no internal secret yet, so the panel's internal chain
+// SetNodeAdmission stores the admission-only flag. newSecret is used only
+// when the node has no internal secret yet, so the panel's internal chain
 // credential stays stable across toggles.
-func (s *Store) SetInboundAdmission(inboundID string, admissionOnly bool, newSecret string) (*InboundAdmission, error) {
+func (s *Store) SetNodeAdmission(nodeID string, admissionOnly bool, newSecret string) (*NodeAdmission, error) {
 	if strings.TrimSpace(newSecret) == "" {
 		return nil, fmt.Errorf("内部凭据密钥不能为空")
 	}
-	if _, err := s.GetInbound(inboundID); err != nil {
+	if _, err := s.GetNode(nodeID); err != nil {
 		return nil, err
 	}
 	_, err := s.db.Exec(`
-		INSERT INTO inbound_admission (inbound_id, admission_only, internal_secret) VALUES (?, ?, ?)
-		ON CONFLICT(inbound_id) DO UPDATE SET admission_only = excluded.admission_only`,
-		inboundID, boolToInt(admissionOnly), newSecret,
+		INSERT INTO node_admission (node_id, admission_only, internal_secret) VALUES (?, ?, ?)
+		ON CONFLICT(node_id) DO UPDATE SET admission_only = excluded.admission_only`,
+		nodeID, boolToInt(admissionOnly), newSecret,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("保存入站准入设置失败：%w", err)
+		return nil, fmt.Errorf("保存节点准入设置失败：%w", err)
 	}
-	all, err := s.ListInboundAdmissions()
+	all, err := s.ListNodeAdmissions()
 	if err != nil {
 		return nil, err
 	}
-	a := all[inboundID]
+	a := all[nodeID]
 	return &a, nil
+}
+
+// migrateInboundAdmissionToNodes converts v0.17.0 per-inbound admission
+// flags: every node with an admission-only inbound attached (standalone or
+// as a chain hop) becomes admission-only, failing closed. The old rows are
+// then removed; the inbound_admission table is kept only for this migration.
+func (s *Store) migrateInboundAdmissionToNodes() error {
+	var pending int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM inbound_admission`).Scan(&pending); err != nil {
+		return fmt.Errorf("检查旧版入站准入设置失败：%w", err)
+	}
+	if pending == 0 {
+		return nil
+	}
+	rows, err := s.db.Query(`
+		SELECT DISTINCT node_id FROM (
+			SELECT ni.node_id FROM node_inbounds ni
+			JOIN inbound_admission a ON a.inbound_id = ni.inbound_id WHERE a.admission_only = 1
+			UNION
+			SELECT h.node_id FROM proxy_chain_hops h
+			JOIN inbound_admission a ON a.inbound_id = h.inbound_id WHERE a.admission_only = 1
+		) ORDER BY node_id`)
+	if err != nil {
+		return fmt.Errorf("读取旧版入站准入设置失败：%w", err)
+	}
+	var nodeIDs []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return fmt.Errorf("读取旧版入站准入设置失败：%w", err)
+		}
+		nodeIDs = append(nodeIDs, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	for _, id := range nodeIDs {
+		secret, err := randomHex(32)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`
+			INSERT INTO node_admission (node_id, admission_only, internal_secret) VALUES (?, 1, ?)
+			ON CONFLICT(node_id) DO UPDATE SET admission_only = 1`, id, secret); err != nil {
+			return fmt.Errorf("迁移节点准入设置失败：%w", err)
+		}
+	}
+	if _, err := tx.Exec(`DELETE FROM inbound_admission`); err != nil {
+		return fmt.Errorf("清理旧版入站准入设置失败：%w", err)
+	}
+	return tx.Commit()
+}
+
+func randomHex(n int) (string, error) {
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("生成随机密钥失败：%w", err)
+	}
+	return hex.EncodeToString(b), nil
 }

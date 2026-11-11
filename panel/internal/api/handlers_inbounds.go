@@ -142,10 +142,6 @@ func (s *Server) handleUpdateInbound(w http.ResponseWriter, r *http.Request) {
 	}
 	delete(existing.Params, "frp_enabled")
 	delete(existing.Params, "frpc_config")
-	if err := s.checkAdmissionCompatible(*existing); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
 	if err := s.Store.UpdateInbound(existing); err != nil {
 		if isNotFound(err) {
 			writeError(w, http.StatusNotFound, err.Error())

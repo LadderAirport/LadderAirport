@@ -363,11 +363,13 @@ type ProxyUser struct {
 	UpdatedAtUnix int64  `json:"updated_at_unix"`
 }
 
-// InboundAdmission holds per-inbound admission settings. AdmissionOnly drops
-// the shared "default" credential so only proxy users (and the panel's
-// internal chain credential derived from InternalSecret) are accepted.
-type InboundAdmission struct {
-	InboundID      string `json:"inbound_id"`
+// NodeAdmission holds per-node admission settings. AdmissionOnly drops the
+// shared "default" credential on every inbound of the node that can carry
+// per-user credentials, so only proxy users (and the panel's internal chain
+// credential derived from InternalSecret) are accepted there. Inbounds that
+// cannot distinguish users keep their shared credential.
+type NodeAdmission struct {
+	NodeID         string `json:"node_id"`
 	AdmissionOnly  bool   `json:"admission_only"`
 	InternalSecret string `json:"-"`
 }

@@ -81,9 +81,9 @@ func TestBuildAddsAdmittedUsers(t *testing.T) {
 		t.Fatalf("shared mode users = %v", names)
 	}
 
-	// Admission-only drops the shared credential, keeps the internal one.
+	// An admission-only node drops the shared credential, keeps the internal one.
 	secret, _ := proxyuser.NewSecret()
-	if _, err := st.SetInboundAdmission(in.ID, true, secret); err != nil {
+	if _, err := st.SetNodeAdmission(node.ID, true, secret); err != nil {
 		t.Fatal(err)
 	}
 	result2, err := builder.Build(node.ID)
@@ -124,7 +124,7 @@ func TestNodeSideChainUsesInternalCredential(t *testing.T) {
 	}
 	chain.Enabled = true
 	secret, _ := proxyuser.NewSecret()
-	adm, err := st.SetInboundAdmission(inB.ID, true, secret)
+	adm, err := st.SetNodeAdmission(nodeB.ID, true, secret)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,5 +135,70 @@ func TestNodeSideChainUsesInternalCredential(t *testing.T) {
 	}
 	if len(outbounds) != 1 || outbounds[0]["uuid"] != internal.UUID() {
 		t.Fatalf("hop into admission-only inbound must use the internal credential: %v", outbounds)
+	}
+}
+
+// The same inbound template is admission-only on one node and shared on
+// another; unsupported inbounds stay shared on the admission-only node.
+func TestNodeAdmissionIsPerNode(t *testing.T) {
+	st := openRouteRuleStore(t)
+	locked, in := addVLESSNode(t, st, "locked", "192.0.2.1", 13201)
+	open := &store.Node{Name: "open", Address: "192.0.2.2", GRPCPort: 50051, Status: "online"}
+	if err := st.CreateNode(open); err != nil {
+		t.Fatal(err)
+	}
+	legacy := &store.InboundConfig{
+		Name: "legacy-ss", Protocol: "shadowsocks", Enabled: true,
+		Params: map[string]any{"port": 13202, "method": "aes-128-gcm", "password": "legacy"},
+	}
+	if err := st.CreateInbound(legacy); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetNodeInbounds(locked.ID, []string{in.ID, legacy.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetNodeInbounds(open.ID, []string{in.ID}); err != nil {
+		t.Fatal(err)
+	}
+	secret, _ := proxyuser.NewSecret()
+	if _, err := st.SetNodeAdmission(locked.ID, true, secret); err != nil {
+		t.Fatal(err)
+	}
+	builder := &Builder{Store: st}
+	inboundsOf := func(nodeID string) []map[string]any {
+		t.Helper()
+		result, err := builder.Build(nodeID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var cfg struct {
+			Inbounds []map[string]any `json:"inbounds"`
+		}
+		if err := json.Unmarshal([]byte(result.JSON), &cfg); err != nil {
+			t.Fatal(err)
+		}
+		return cfg.Inbounds
+	}
+	firstUser := func(inbound map[string]any) string {
+		users, _ := inbound["users"].([]any)
+		if len(users) == 0 {
+			return ""
+		}
+		return users[0].(map[string]any)["name"].(string)
+	}
+	for _, inbound := range inboundsOf(locked.ID) {
+		switch inbound["type"] {
+		case "vless":
+			if firstUser(inbound) != proxyuser.InternalUserName {
+				t.Fatalf("locked vless users = %v", inbound["users"])
+			}
+		case "shadowsocks":
+			if inbound["password"] != "legacy" || inbound["users"] != nil {
+				t.Fatalf("legacy SS must stay shared on locked node: %v", inbound)
+			}
+		}
+	}
+	if got := firstUser(inboundsOf(open.ID)[0]); got != "default" {
+		t.Fatalf("open node must keep the shared credential, first user = %q", got)
 	}
 }

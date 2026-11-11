@@ -196,42 +196,64 @@ func (s *Server) validateSubscriptionUser(userID string) (string, error) {
 	return userID, nil
 }
 
-// --- Inbound admission ---
+// --- Node admission ---
 
-type inboundAdmissionView struct {
-	InboundID     string `json:"inbound_id"`
+type sharedInboundView struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Protocol string `json:"protocol"`
+	Reason   string `json:"reason"`
+}
+
+type nodeAdmissionView struct {
+	NodeID        string `json:"node_id"`
 	AdmissionOnly bool   `json:"admission_only"`
-	Supported     bool   `json:"supported"`
-	Reason        string `json:"reason,omitempty"`
+	// SharedInbounds are attached inbounds that cannot distinguish users and
+	// therefore keep their shared credential even when admission-only is on.
+	SharedInbounds []sharedInboundView `json:"shared_inbounds"`
 }
 
-func (s *Server) handleListInboundAdmissions(w http.ResponseWriter, r *http.Request) {
-	inbounds, err := s.Store.ListInbounds()
+func (s *Server) nodeAdmissionViews() ([]nodeAdmissionView, error) {
+	nodes, err := s.Store.ListNodes()
+	if err != nil {
+		return nil, err
+	}
+	attachments, err := s.Store.ListAllNodeInboundAttachments()
+	if err != nil {
+		return nil, err
+	}
+	admissions, err := s.Store.ListNodeAdmissions()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]nodeAdmissionView, 0, len(nodes))
+	for _, n := range nodes {
+		view := nodeAdmissionView{NodeID: n.ID, AdmissionOnly: admissions[n.ID].AdmissionOnly, SharedInbounds: []sharedInboundView{}}
+		for _, att := range attachments[n.ID] {
+			in := att.EffectiveInbound()
+			if ok, reason := proxyuser.Supports(in); !ok {
+				view.SharedInbounds = append(view.SharedInbounds, sharedInboundView{
+					ID: in.ID, Name: in.Name, Protocol: in.Protocol, Reason: reason,
+				})
+			}
+		}
+		out = append(out, view)
+	}
+	return out, nil
+}
+
+func (s *Server) handleListNodeAdmissions(w http.ResponseWriter, r *http.Request) {
+	views, err := s.nodeAdmissionViews()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	admissions, err := s.Store.ListInboundAdmissions()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	out := make([]inboundAdmissionView, 0, len(inbounds))
-	for _, in := range inbounds {
-		ok, reason := proxyuser.Supports(in)
-		out = append(out, inboundAdmissionView{
-			InboundID:     in.ID,
-			AdmissionOnly: admissions[in.ID].AdmissionOnly,
-			Supported:     ok,
-			Reason:        reason,
-		})
-	}
-	writeJSON(w, http.StatusOK, out)
+	writeJSON(w, http.StatusOK, views)
 }
 
-func (s *Server) handlePutInboundAdmission(w http.ResponseWriter, r *http.Request) {
-	in, err := s.Store.GetInbound(pathID(r))
-	if err != nil {
+func (s *Server) handlePutNodeAdmission(w http.ResponseWriter, r *http.Request) {
+	nodeID := pathID(r)
+	if _, err := s.Store.GetNode(nodeID); err != nil {
 		if isNotFound(err) {
 			writeError(w, http.StatusNotFound, err.Error())
 			return
@@ -250,57 +272,45 @@ func (s *Server) handlePutInboundAdmission(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusBadRequest, "必须提供 admission_only")
 		return
 	}
-	supported, reason := proxyuser.Supports(*in)
-	if *body.AdmissionOnly && !supported {
-		writeError(w, http.StatusBadRequest, "无法开启「仅准入用户」："+reason)
-		return
-	}
 	secret, err := proxyuser.NewSecret()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	before, err := s.Store.ListInboundAdmissions()
+	before, err := s.Store.ListNodeAdmissions()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	adm, err := s.Store.SetInboundAdmission(in.ID, *body.AdmissionOnly, secret)
+	adm, err := s.Store.SetNodeAdmission(nodeID, *body.AdmissionOnly, secret)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if before[in.ID].AdmissionOnly != adm.AdmissionOnly {
+	if before[nodeID].AdmissionOnly != adm.AdmissionOnly {
 		s.scheduleAdmissionReapply()
 	}
-	writeJSON(w, http.StatusOK, inboundAdmissionView{
-		InboundID: in.ID, AdmissionOnly: adm.AdmissionOnly, Supported: supported, Reason: reason,
-	})
-}
-
-// checkAdmissionCompatible rejects inbound edits that would leave an
-// admission-only inbound unable to carry per-user credentials.
-func (s *Server) checkAdmissionCompatible(in store.InboundConfig) error {
-	admissions, err := s.Store.ListInboundAdmissions()
+	views, err := s.nodeAdmissionViews()
 	if err != nil {
-		return err
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
 	}
-	if !admissions[in.ID].AdmissionOnly {
-		return nil
+	for _, v := range views {
+		if v.NodeID == nodeID {
+			writeJSON(w, http.StatusOK, v)
+			return
+		}
 	}
-	if ok, reason := proxyuser.Supports(in); !ok {
-		return fmt.Errorf("该入站开启了「仅准入用户」，请先关闭再修改：%s", reason)
-	}
-	return nil
+	writeError(w, http.StatusNotFound, "节点不存在")
 }
 
 // applySubscriptionCredentials substitutes the bound user's credentials into
-// local endpoints and chain hops, and omits what an admission-only inbound
+// local endpoints and chain hops, and omits what an admission-only node
 // would reject (a chain is omitted as a whole when any hop is).
 func (s *Server) applySubscriptionCredentials(
 	sub *store.Subscription, local []subscription.ProxyEndpoint, chains []subscription.Chain,
 ) ([]subscription.ProxyEndpoint, []subscription.Chain, error) {
-	admissions, err := s.Store.ListInboundAdmissions()
+	admissions, err := s.Store.ListNodeAdmissions()
 	if err != nil {
 		return nil, nil, err
 	}
